@@ -153,7 +153,7 @@ internal static class StationLocationSheets
             .ToDictionary(a => a.Tag, a => a.TextString, StringComparer.OrdinalIgnoreCase);
         string Field(string key) => values.GetValueOrDefault(key, "");
         var photo = Entities(tr, layout).OfType<RasterImage>().FirstOrDefault(image => image.Layer == PhotoLayer);
-        var path = photo == null ? "" : ((RasterImageDef)tr.GetObject(photo.ImageDefId, OpenMode.ForRead)).SourceFileName;
+        var path = photo == null ? "" : PhotoPath(tr, photo, out _);
         return new(Field("PROJECTNAAM"), Field("DEELGEBIED"), Field("GEMEENTE"), Field("PROJECTNR.CIRCET"),
             Field("PROJECTNR.OPDR."), Field("GET"), Field("TDD"), Field("OVERIGE2"), Field("OVERIGE1"), Field("TEKENINGNUMMER"), path);
     }
@@ -235,10 +235,12 @@ internal static class StationLocationSheets
             WriteMetadata(db, tr, layout, sheet);
             step = "detailkaart centreren";
             Center(tr, viewport, point);
-            step = "onderhoek en foto invullen";
+            step = "onderhoek invullen";
             ClearRevisions(db, tr, layout);
-            WriteFields(db, tr, layout, fields);
+            SetAttributes(db, tr, layout, fields.Attributes());
             WriteSharedProject(db, tr, fields);
+            step = "locatiefoto plaatsen";
+            SetPhoto(db, tr, layout, fields.Photo);
             step = "overzicht en laagzichtbaarheid bijwerken";
             RefreshOverview(db, tr);
             tr.Commit();
@@ -319,10 +321,6 @@ internal static class StationLocationSheets
             RefreshOverview(db, tr);
         DisableLayoutGrid(tr, layout);
         var viewport = MapViewport(tr, layout);
-        foreach (var photo in Entities(tr, layout).OfType<RasterImage>().Where(photo => photo.Layer == PhotoLayer && !photo.IsClipped))
-            if (IsLive(photo.ImageDefId) && tr.GetObject(photo.ImageDefId, OpenMode.ForRead) is RasterImageDef definition &&
-                File.Exists(definition.SourceFileName))
-                FitPhoto(photo, definition.Size);
         if (layoutName != OverviewName && ReadSheets(db, tr).FirstOrDefault(sheet => sheet.Name == layoutName) is { } location)
             Center(tr, viewport, LocationBlock(tr, ModelBlocks(db, tr), location).Position);
         if (!viewport.On)
@@ -634,23 +632,87 @@ internal static class StationLocationSheets
         SetPhoto(db, tr, layout, fields.Photo);
     }
 
+    private const string PhotoSourceKey = "STATIONLOCATIES_FOTOBRON";
+
+    private static string PhotoPath(Transaction tr, RasterImage photo, out bool prepared)
+    {
+        prepared = false;
+        var definition = (RasterImageDef)tr.GetObject(photo.ImageDefId, OpenMode.ForRead);
+        if (!definition.ExtensionDictionary.IsNull)
+        {
+            var dictionary = (DBDictionary)tr.GetObject(definition.ExtensionDictionary, OpenMode.ForRead);
+            if (dictionary.Contains(PhotoSourceKey))
+            {
+                var record = (Xrecord)tr.GetObject(dictionary.GetAt(PhotoSourceKey), OpenMode.ForRead);
+                using var data = record.Data;
+                if (data?.AsArray().FirstOrDefault().Value is string source)
+                {
+                    prepared = true;
+                    return source;
+                }
+            }
+        }
+        return definition.SourceFileName;
+    }
+
+    private static PhotoFrame PhotoBounds(Transaction tr, Layout layout)
+    {
+        var viewport = FindMapViewport(tr, layout);
+        if (viewport is not { NonRectClipOn: true } || !IsLive(viewport.NonRectClipEntityId) ||
+            tr.GetObject(viewport.NonRectClipEntityId, OpenMode.ForRead) is not Polyline clip)
+            return PhotoFrame.Default;
+
+        const double tolerance = 0.01;
+        var count = clip.NumberOfVertices;
+        double area = 0;
+        for (var i = 0; i < count; i++)
+        {
+            var a = clip.GetPoint2dAt(i);
+            var b = clip.GetPoint2dAt((i + 1) % count);
+            area += a.X * b.Y - a.Y * b.X;
+        }
+        for (var i = 0; i < count; i++)
+        {
+            var corner = clip.GetPoint2dAt(i);
+            var a = clip.GetPoint2dAt((i + count - 1) % count);
+            var b = clip.GetPoint2dAt((i + 1) % count);
+            var incoming = corner - a;
+            var outgoing = b - corner;
+            if ((incoming.X * outgoing.Y - incoming.Y * outgoing.X) * area >= 0) continue;
+            if (Math.Abs(b.X - corner.X) < tolerance) (a, b) = (b, a);
+            if (Math.Abs(a.X - corner.X) < tolerance && a.Y > corner.Y + tolerance &&
+                Math.Abs(b.Y - corner.Y) < tolerance && b.X > corner.X + tolerance)
+                return new(corner.X, corner.Y, b.X - corner.X, a.Y - corner.Y);
+        }
+        return PhotoFrame.Default;
+    }
+
     private static void SetPhoto(Database db, Transaction tr, Layout layout, string path)
     {
         var oldPhoto = Entities(tr, layout).OfType<RasterImage>().FirstOrDefault(image => image.Layer == PhotoLayer);
+        var frame = PhotoBounds(tr, layout);
+        if (oldPhoto != null && string.Equals(PhotoPath(tr, oldPhoto, out var prepared), path, StringComparison.OrdinalIgnoreCase))
+        {
+            var orientation = oldPhoto.Orientation;
+            if (!File.Exists(path) || (prepared &&
+                Math.Abs(orientation.Origin.X - frame.Left) < 1e-6 && Math.Abs(orientation.Origin.Y - frame.Bottom) < 1e-6 &&
+                Math.Abs(orientation.Xaxis.Length - frame.Width) < 1e-6 && Math.Abs(orientation.Yaxis.Length - frame.Height) < 1e-6))
+                return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            var source = ClipboardPhotos.Persist(path, db.Filename);
+            var raster = PhotoRaster.Prepare(source, db.Filename, frame);
+            AttachPhoto(db, tr, layout, source, raster, frame);
+            RememberPhotoFolder(db, tr, path);
+        }
+
         if (oldPhoto != null)
         {
-            var oldDef = (RasterImageDef)tr.GetObject(oldPhoto.ImageDefId, OpenMode.ForRead);
-            if (string.Equals(oldDef.SourceFileName, path, StringComparison.OrdinalIgnoreCase))
-            {
-                if (!oldPhoto.IsClipped && File.Exists(path)) FitPhoto(oldPhoto, oldDef.Size);
-                return;
-            }
             if (!oldPhoto.IsWriteEnabled) oldPhoto.UpgradeOpen();
             oldPhoto.Erase();
         }
-        if (string.IsNullOrWhiteSpace(path)) return;
-        AttachPhoto(db, tr, layout, ClipboardPhotos.Persist(path, db.Filename));
-        RememberPhotoFolder(db, tr, path);
     }
 
     private static void ClearRevisions(Database db, Transaction tr, Layout layout)
@@ -675,48 +737,32 @@ internal static class StationLocationSheets
         }
     }
 
-    private static void AttachPhoto(Database db, Transaction tr, Layout layout, string path)
+    private static void AttachPhoto(Database db, Transaction tr, Layout layout, string source, string raster, PhotoFrame frame)
     {
         var dictionaryId = RasterImageDef.GetImageDictionary(db);
         if (dictionaryId.IsNull) dictionaryId = RasterImageDef.CreateImageDictionary(db);
         var dictionary = (DBDictionary)tr.GetObject(dictionaryId, OpenMode.ForWrite);
-        var definition = new RasterImageDef { SourceFileName = path };
+        var definition = new RasterImageDef { SourceFileName = raster };
         definition.Load();
         var id = dictionary.SetAt("TB_FOTO_" + Guid.NewGuid().ToString("N"), definition);
         tr.AddNewlyCreatedDBObject(definition, true);
         var image = new RasterImage
         {
-            ImageDefId = id, LayerId = Layer(db, tr, PhotoLayer), ShowImage = true
+            ImageDefId = id, LayerId = Layer(db, tr, PhotoLayer), ShowImage = true,
+            Orientation = new CoordinateSystem3d(new Point3d(frame.Left, frame.Bottom, 0),
+                new Vector3d(frame.Width, 0, 0), new Vector3d(0, frame.Height, 0))
         };
         var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForWrite);
         space.AppendEntity(image);
         tr.AddNewlyCreatedDBObject(image, true);
         RasterImage.EnableReactors(true);
         image.AssociateRasterDef(definition);
-        FitPhoto(image, definition.Size);
-    }
 
-    private static void FitPhoto(RasterImage image, Vector2d pixels)
-    {
-        const double left = 307.5, bottom = 219.53, width = 109.3, height = 74.28;
-        if (pixels.X <= 0 || pixels.Y <= 0)
-            throw new InvalidOperationException("De locatiefoto heeft geen geldige afmetingen.");
-        if (!image.IsWriteEnabled) image.UpgradeOpen();
-
-        var scale = Math.Max(width / pixels.X, height / pixels.Y);
-        var w = pixels.X * scale;
-        var h = pixels.Y * scale;
-        image.Orientation = new CoordinateSystem3d(new Point3d(left + (width - w) / 2, bottom + (height - h) / 2, 0),
-            new Vector3d(w, 0, 0), new Vector3d(0, h, 0));
-
-        var toPixels = image.PixelToModelTransform.Inverse();
-        var lower = new Point3d(left, bottom, 0).TransformBy(toPixels);
-        var upper = new Point3d(left + width, bottom + height, 0).TransformBy(toPixels);
-        image.SetClipBoundary(ClipBoundaryType.Rectangle, new Point2dCollection(new[]
-        {
-            new Point2d(Math.Min(lower.X, upper.X), Math.Min(lower.Y, upper.Y)),
-            new Point2d(Math.Max(lower.X, upper.X), Math.Max(lower.Y, upper.Y))
-        }));
-        image.IsClipped = true;
+        definition.CreateExtensionDictionary();
+        var metadata = (DBDictionary)tr.GetObject(definition.ExtensionDictionary, OpenMode.ForWrite);
+        using var data = new ResultBuffer(new TypedValue(1, source));
+        var record = new Xrecord { Data = data };
+        metadata.SetAt(PhotoSourceKey, record);
+        tr.AddNewlyCreatedDBObject(record, true);
     }
 }
