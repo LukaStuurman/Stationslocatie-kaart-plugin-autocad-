@@ -2,6 +2,7 @@ using System.Drawing;
 using Font = System.Drawing.Font;
 using PlotType = Autodesk.AutoCAD.DatabaseServices.PlotType;
 using System.IO;
+using AcApp = Autodesk.AutoCAD.ApplicationServices.Core.Application;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.PlottingServices;
@@ -160,42 +161,60 @@ internal static class StationPlot
             throw new InvalidOperationException("Wacht tot de lopende plot gereed is.");
         Directory.CreateDirectory(options.Folder);
         var previous = LayoutManager.Current.CurrentLayout;
+        var backgroundPlot = AcApp.GetSystemVariable("BACKGROUNDPLOT");
+        var staging = Directory.CreateTempSubdirectory("Stationplots-");
         var written = 0;
-        using var settings = CreateSettings(doc.Database, options);
+        var current = options.Layouts.FirstOrDefault() ?? "";
         try
         {
+            AcApp.SetSystemVariable("BACKGROUNDPLOT", (short)0);
             foreach (var layoutName in options.Layouts)
             {
+                current = layoutName;
+                doc.Editor.WriteMessage($"\nPlotten {written + 1}/{options.Layouts.Length}  {layoutName}\n");
                 StationLocationSheets.OpenSheet(doc, layoutName);
                 doc.Editor.Regen();
-                var pdf = NextFile(options.Folder, layoutName);
-                var temporary = Path.Combine(options.Folder, ".stations-" + Guid.NewGuid().ToString("N") + ".pdf");
-                try
-                {
-                    doc.Editor.WriteMessage($"\nPlotten {written + 1}/{options.Layouts.Length}  {layoutName}");
-                    PlotSheet(doc, layoutName, settings, temporary);
-                    if (!File.Exists(temporary) || new FileInfo(temporary).Length == 0)
-                        throw new IOException("AutoCAD heeft geen PDF aangemaakt.");
-                    File.Move(temporary, pdf);
-                    written++;
-                }
-                finally
-                {
-                    try { File.Delete(temporary); }
-                    catch (IOException) { }
-                    catch (UnauthorizedAccessException) { }
-                }
+                using var settings = CreateSettings(doc.Database, layoutName, options);
+                var stem = Path.Combine(staging.FullName, $"Blad-{written + 1:D4}");
+                PlotSheet(doc, layoutName, settings, stem);
+                var result = FindPdf(stem);
+                File.Move(result, NextFile(options.Folder, layoutName));
+                written++;
             }
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException($"Plotten onderbroken. {written} van {options.Layouts.Length} PDF’s opgeslagen. {ex.Message}", ex);
+            throw new InvalidOperationException(
+                $"Plotten gestopt bij '{current}' met '{options.Device}'. {written} van {options.Layouts.Length} PDF's opgeslagen. {ex.Message}", ex);
         }
         finally
         {
-            LayoutManager.Current.CurrentLayout = previous;
+            try
+            {
+                AcApp.SetSystemVariable("BACKGROUNDPLOT", backgroundPlot);
+                LayoutManager.Current.CurrentLayout = previous;
+            }
+            finally
+            {
+                try { staging.Delete(recursive: true); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
         }
         return written;
+    }
+
+    private static string FindPdf(string stem)
+    {
+        Span<byte> header = stackalloc byte[5];
+        foreach (var path in new[] { stem + ".pdf", stem })
+        {
+            if (!File.Exists(path)) continue;
+            using var file = File.OpenRead(path);
+            if (file.Read(header) == header.Length && header.SequenceEqual("%PDF-"u8))
+                return path;
+        }
+        throw new IOException("De PDF-plotter heeft geen geldig PDF-bestand teruggegeven.");
     }
 
     private static string NextFile(string folder, string layout)
@@ -208,13 +227,13 @@ internal static class StationPlot
         return path;
     }
 
-    private static PlotSettings CreateSettings(Database db, StationPlotOptions options)
+    private static PlotSettings CreateSettings(Database db, string layoutName, StationPlotOptions options)
     {
         var settings = new PlotSettings(false);
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
-            var id = LayoutManager.Current.GetLayoutId(options.Layouts[0]);
+            var id = LayoutManager.Current.GetLayoutId(layoutName);
             settings.CopyFrom((Layout)tr.GetObject(id, OpenMode.ForRead));
             ConfigureSettings(settings, options);
             tr.Commit();
@@ -250,37 +269,51 @@ internal static class StationPlot
         using var info = new PlotInfo { Layout = id, OverrideSettings = settings };
         using var validate = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled };
         validate.Validate(info);
-        using var progress = new PlotProgressDialog(false, 1, true);
+        using var progress = new PlotProgressDialog(false, 1, true)
+        {
+            LowerPlotProgressRange = 0,
+            UpperPlotProgressRange = 100,
+            PlotProgressPos = 0
+        };
         using var engine = PlotFactory.CreatePublishEngine();
         progress.OnBeginPlot();
-        progress.IsVisible = false;
+        progress.IsVisible = true;
+        var started = false;
+        var cancelled = false;
         try
         {
             engine.BeginPlot(progress, null);
+            started = true;
+            engine.BeginDocument(info, doc.Name, null, 1, true, path);
             try
             {
-                engine.BeginDocument(info, doc.Name, null, 1, true, path);
+                using var page = new PlotPageInfo();
+                progress.OnBeginSheet();
+                progress.LowerSheetProgressRange = 0;
+                progress.UpperSheetProgressRange = 100;
+                progress.SheetProgressPos = 0;
                 try
                 {
-                    using var page = new PlotPageInfo();
-                    progress.OnBeginSheet();
                     engine.BeginPage(page, info, true, null);
                     try
                     {
                         engine.BeginGenerateGraphics(null);
                         engine.EndGenerateGraphics(null);
                     }
-                    finally
-                    {
-                        engine.EndPage(null);
-                        progress.OnEndSheet();
-                    }
+                    finally { engine.EndPage(null); }
+                    cancelled = progress.IsPlotCancelled || progress.IsSheetCancelled;
+                    progress.SheetProgressPos = 100;
                 }
-                finally { engine.EndDocument(null); }
+                finally { progress.OnEndSheet(); }
             }
-            finally { engine.EndPlot(null); }
+            finally { engine.EndDocument(null); }
+            progress.PlotProgressPos = 100;
         }
-        finally { progress.OnEndPlot(); }
+        finally
+        {
+            try { progress.OnEndPlot(); }
+            finally { if (started) engine.EndPlot(null); }
+        }
+        if (cancelled) throw new OperationCanceledException("AutoCAD heeft de plot geannuleerd.");
     }
 }
-
