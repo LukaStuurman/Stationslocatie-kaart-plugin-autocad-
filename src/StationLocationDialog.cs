@@ -67,12 +67,12 @@ public sealed class Plugin
                     case StationLocationAction.Edit when selected != null:
                         using (var input = new StationFieldsDialog(StationLocationSheets.ReadFields(doc.Database, selected)
                             .FillSharedFrom(StationLocationSheets.ProjectFields(doc.Database)),
-                            number: selected.Number, preferred: selected.Alternative == 0,
+                            number: selected.Number, preferred: selected.Alternative == 0, alternativeNumber: selected.Alternative,
                             photoFolder: StationLocationSheets.PhotoFolder(doc.Database),
                             locate: () => StationLocationSheets.Position(doc.Database, selected)))
                             if (AcApp.ShowModalDialog(input) == DialogResult.OK)
                             {
-                                var plan = StationLocationSheets.PlanEdit(sheets, selected, input.Number, input.Preferred);
+                                var plan = StationLocationSheets.PlanEdit(sheets, selected, input.Number, input.Preferred, input.AlternativeNumber);
                                 if (plan.Changes.Length > 1)
                                 {
                                     var other = plan.Changes[1];
@@ -176,7 +176,7 @@ internal sealed class StationLocationDialog : Form
         locations.Columns.Add("Locatietype", 200);
         foreach (var sheet in sheets)
         {
-            var item = new ListViewItem(new[] { sheet.Name, sheet.Alternative == 0 ? "Voorkeurslocatie" : "Alternatieve locatie " + sheet.Alternative })
+            var item = new ListViewItem(new[] { sheet.Name, sheet.Alternative == 0 ? "Voorkeurslocatie" : sheet.Alternative == 1 ? "Alternatieve locatie" : "Alternatieve locatie " + sheet.Alternative })
                 { Tag = sheet };
             locations.Items.Add(item);
             item.Selected = sheet.Name == previous?.Name;
@@ -234,7 +234,9 @@ internal sealed class StationFieldsDialog : Form
     private readonly TableLayoutPanel grid = new() { Dock = DockStyle.Fill, ColumnCount = 3, AutoScroll = true, Padding = new Padding(12) };
     private int row;
     internal int Number => (int)number.Value;
+    private readonly TextBox alternative = new() { Width = 230, PlaceholderText = "Leeg voor AL, of vul 2 of hoger in" };
     internal bool Preferred => kind.SelectedIndex == 0;
+    internal int AlternativeNumber { get; private set; } = 1;
     internal bool LookupAddress => lookupAddress.Checked;
     internal StationFields Fields => new(Value("Projectnaam", original.Project), Value("Deelgebied", original.Area),
         Value("Gemeente", original.Municipality), Value("Intern projectnummer", original.ProjectNumber),
@@ -244,7 +246,7 @@ internal sealed class StationFieldsDialog : Form
 
     internal StationFieldsDialog(StationFields initial, bool adding = false, bool project = false,
         int number = 1, bool preferred = true, string photoFolder = "", HashSet<int>? existingPreferred = null,
-        Func<Point3d>? locate = null, bool showOverviewFields = true)
+        Func<Point3d>? locate = null, bool showOverviewFields = true, int alternativeNumber = 0)
     {
         original = initial;
         this.photoFolder = photoFolder;
@@ -269,6 +271,13 @@ internal sealed class StationFieldsDialog : Form
             if (adding) this.number.ValueChanged += (_, _) => kind.SelectedIndex = existingPreferred?.Contains(Number) == true ? 1 : 0;
             Row("Trafo-nummer", this.number);
             Row("Locatietype", kind);
+            if (!adding)
+            {
+                alternative.Text = alternativeNumber > 1 ? alternativeNumber.ToString(CultureInfo.InvariantCulture) : "";
+                alternative.Enabled = !Preferred;
+                kind.SelectedIndexChanged += (_, _) => alternative.Enabled = !Preferred;
+                Row("AL-nummer (optioneel)", alternative);
+            }
         }
         Heading("Projectgegevens voor alle bladen");
         TextRow("Projectnaam", initial.Project);
@@ -319,6 +328,16 @@ internal sealed class StationFieldsDialog : Form
         ok.Padding = new Padding(10, 2, 10, 2);
         ok.Click += (_, _) =>
         {
+            var suffix = alternative.Text.Trim();
+            var parsed = 1;
+            if (!adding && !project && !Preferred && suffix.Length > 0 &&
+                (!int.TryParse(suffix, NumberStyles.None, CultureInfo.InvariantCulture, out parsed) || parsed < 2 || parsed > 999999))
+            {
+                MessageBox.Show(this, "Laat AL-nummer leeg voor AL, of vul een getal van 2 t/m 999999 in.", Text);
+                alternative.Focus();
+                return;
+            }
+            AlternativeNumber = parsed;
             var current = Fields;
             if (!DateTime.TryParseExact(current.Date, new[] { "d-M-yyyy", "dd-MM-yyyy" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
                 MessageBox.Show(this, "Gebruik een datum als 10-11-2026.", Text);

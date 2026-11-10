@@ -75,23 +75,27 @@ internal static class StationLocationSheets
 
     private static string SheetSuffix(int alternative) => alternative switch { 0 => "VL", 1 => "AL", _ => "AL" + alternative };
 
-    internal static StationEditPlan PlanEdit(IReadOnlyList<StationSheet> sheets, StationSheet sheet, int number, bool preferred)
+    internal static StationEditPlan PlanEdit(IReadOnlyList<StationSheet> sheets, StationSheet sheet, int number, bool preferred, int alternativeNumber)
     {
         if (!sheets.Contains(sheet))
             throw new InvalidOperationException("De geselecteerde locatie is gewijzigd of verwijderd.");
-        if (sheet.Number == number && preferred == (sheet.Alternative == 0))
+        var requested = preferred ? 0 : alternativeNumber;
+        if (sheet.Number == number && sheet.Alternative == requested)
             return new(sheet, []);
 
         var others = sheets.Where(item => item.Number == number && item != sheet).ToArray();
-        var nextAlternative = others.Select(item => item.Alternative).DefaultIfEmpty().Max() + 1;
+        if (!preferred && others.Any(item => item.Alternative == requested))
+            throw new InvalidOperationException($"Er bestaat al een locatie met de naam Trafo {number} {SheetSuffix(requested)}.");
+
         StationSheet Change(StationSheet old, int alternative) =>
             old with { Number = number, Alternative = alternative, Name = $"Trafo {number} {SheetSuffix(alternative)}" };
 
-        var target = Change(sheet, preferred ? 0 : nextAlternative);
+        var target = Change(sheet, requested);
         var changes = new List<StationSheetChange> { new(sheet, target) };
         if (preferred && others.FirstOrDefault(item => item.Alternative == 0) is { } incumbent)
         {
-            var alternative = sheet.Number == number && sheet.Alternative > 0 ? sheet.Alternative : nextAlternative;
+            var alternative = sheet.Number == number && sheet.Alternative > 0 ? sheet.Alternative
+                : others.Select(item => item.Alternative).DefaultIfEmpty().Max() + 1;
             changes.Add(new(incumbent, Change(incumbent, alternative)));
         }
         return new(target, changes.ToArray());
