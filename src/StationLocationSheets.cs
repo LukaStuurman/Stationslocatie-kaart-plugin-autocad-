@@ -368,12 +368,17 @@ internal static class StationLocationSheets
             RefreshOverview(db, tr);
         DisableLayoutGrid(tr, layout);
         var viewport = MapViewport(tr, layout);
-        if (layoutName != OverviewName && ReadSheets(db, tr).FirstOrDefault(sheet => sheet.Name == layoutName) is { } location)
-            Center(tr, viewport, LocationBlock(tr, ModelBlocks(db, tr), location).Position);
         if (!viewport.On)
         {
             if (!viewport.IsWriteEnabled) viewport.UpgradeOpen();
             viewport.On = true;
+        }
+        if (layoutName != OverviewName && ReadSheets(db, tr).FirstOrDefault(sheet =>
+            string.Equals(sheet.Name, layoutName, StringComparison.OrdinalIgnoreCase)) is { } location)
+        {
+            Center(tr, viewport, LocationBlock(tr, ModelBlocks(db, tr), location).Position);
+            var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            IsolateViewport(viewport, layers[location.Layer], StationLayers(tr, layers));
         }
         tr.Commit();
     }
@@ -627,21 +632,26 @@ internal static class StationLocationSheets
     private static void Isolate(Database db, Transaction tr, IReadOnlyList<StationSheet> sheets)
     {
         var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-        var locations = layers.Cast<ObjectId>().Where(id =>
+        var locations = StationLayers(tr, layers);
+        foreach (var sheet in sheets)
+            IsolateViewport(MapViewport(tr, GetLayout(db, tr, sheet.Name)), layers[sheet.Layer], locations);
+    }
+
+    private static ObjectId[] StationLayers(Transaction tr, LayerTable layers) =>
+        layers.Cast<ObjectId>().Where(IsLive).Where(id =>
         {
             var name = ((LayerTableRecord)tr.GetObject(id, OpenMode.ForRead)).Name;
             return name.StartsWith("TB_STATION_", StringComparison.OrdinalIgnoreCase) && name != PhotoLayer;
         }).ToArray();
-        foreach (var sheet in sheets)
-        {
-            var own = layers[sheet.Layer];
-            var viewport = MapViewport(tr, GetLayout(db, tr, sheet.Name));
-            if (!viewport.IsWriteEnabled) viewport.UpgradeOpen();
-            viewport.ThawLayersInViewport(new ObjectIdCollection(new[] { own }).GetEnumerator());
-            var toFreeze = locations.Where(id => id != own).ToArray();
-            if (toFreeze.Length > 0)
-                viewport.FreezeLayersInViewport(new ObjectIdCollection(toFreeze).GetEnumerator());
-        }
+
+    private static void IsolateViewport(Viewport viewport, ObjectId own, ObjectId[] locations)
+    {
+        if (!viewport.IsWriteEnabled) viewport.UpgradeOpen();
+        if (viewport.IsLayerFrozenInViewport(own))
+            viewport.ThawLayersInViewport(new[] { own }.GetEnumerator());
+        var toFreeze = locations.Where(id => id != own && !viewport.IsLayerFrozenInViewport(id)).ToArray();
+        if (toFreeze.Length > 0)
+            viewport.FreezeLayersInViewport(toFreeze.GetEnumerator());
     }
 
     private static void RefreshOverview(Database db, Transaction tr, string? excluded = null)
@@ -668,7 +678,7 @@ internal static class StationLocationSheets
             Center(tr, viewport, new Point3d((left + right) / 2, (bottom + top) / 2, 0), scale);
             var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
             var visible = sheets.Select(sheet => layers[sheet.Layer]).Append(overviewLayer);
-            viewport.ThawLayersInViewport(new ObjectIdCollection(visible.ToArray()).GetEnumerator());
+            viewport.ThawLayersInViewport(visible.ToArray().GetEnumerator());
             SetAttributes(db, tr, layout, new Dictionary<string, string> { ["SCHAAL"] = "1:" + scale });
         }
 
