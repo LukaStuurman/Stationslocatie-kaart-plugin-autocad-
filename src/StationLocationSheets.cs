@@ -634,7 +634,9 @@ internal static class StationLocationSheets
             var viewport = MapViewport(tr, GetLayout(db, tr, sheet.Name));
             if (!viewport.IsWriteEnabled) viewport.UpgradeOpen();
             viewport.ThawLayersInViewport(new ObjectIdCollection(new[] { own }).GetEnumerator());
-            viewport.FreezeLayersInViewport(new ObjectIdCollection(locations.Where(id => id != own).ToArray()).GetEnumerator());
+            var toFreeze = locations.Where(id => id != own).ToArray();
+            if (toFreeze.Length > 0)
+                viewport.FreezeLayersInViewport(new ObjectIdCollection(toFreeze).GetEnumerator());
         }
     }
 
