@@ -66,11 +66,22 @@ public sealed class Plugin
                     case StationLocationAction.Edit when selected != null:
                         using (var input = new StationFieldsDialog(StationLocationSheets.ReadFields(doc.Database, selected)
                             .FillSharedFrom(StationLocationSheets.ProjectFields(doc.Database)),
+                            number: selected.Number, preferred: selected.Alternative == 0,
                             photoFolder: StationLocationSheets.PhotoFolder(doc.Database),
                             locate: () => StationLocationSheets.Position(doc.Database, selected)))
                             if (AcApp.ShowModalDialog(input) == DialogResult.OK)
                             {
-                                StationLocationSheets.Edit(doc, selected, input.Fields);
+                                var plan = StationLocationSheets.PlanEdit(sheets, selected, input.Number, input.Preferred);
+                                if (plan.Changes.Length > 1)
+                                {
+                                    var other = plan.Changes[1];
+                                    if (MessageBox.Show($"'{plan.Target.Name}' wordt de voorkeurslocatie. " +
+                                        $"De huidige voorkeurslocatie wordt '{other.After.Name}'. Doorgaan?", "Stationlocaties",
+                                        MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                                        break;
+                                }
+                                StationLocationSheets.Edit(doc, plan, input.Fields);
+                                selected = plan.Target;
                                 doc.Editor.Regen();
                             }
                         break;
@@ -239,7 +250,7 @@ internal sealed class StationFieldsDialog : Form
         Text = adding ? "Locatie plaatsen" : project ? "Projectgegevens en blad Totaal" : "Bladgegevens en locatiefoto";
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(850, adding ? 725 : 645);
+        ClientSize = new Size(850, project ? 645 : 725);
         MinimumSize = new Size(710, 470);
         BackColor = Color.FromArgb(244, 247, 250);
         Font = new Font("Segoe UI", 9F);
@@ -248,13 +259,13 @@ internal sealed class StationFieldsDialog : Form
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 105));
-        if (adding)
+        if (!project)
         {
             Heading("Stationlocatie");
             this.number.Value = number;
             kind.Items.AddRange(new[] { "VL – Voorkeurslocatie", "AL – Alternatieve locatie" });
             kind.SelectedIndex = preferred ? 0 : 1;
-            this.number.ValueChanged += (_, _) => kind.SelectedIndex = existingPreferred?.Contains(Number) == true ? 1 : 0;
+            if (adding) this.number.ValueChanged += (_, _) => kind.SelectedIndex = existingPreferred?.Contains(Number) == true ? 1 : 0;
             Row("Trafo-nummer", this.number);
             Row("Locatietype", kind);
         }

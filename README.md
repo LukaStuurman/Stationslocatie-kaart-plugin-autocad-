@@ -25,6 +25,10 @@ Download `Stationslocaties-AutoCAD.zip` uit deze repo, pak het bestand uit, slui
 
 Locatiefoto’s blijven rasterreferenties. Neem ze mee bij overdracht van de DWG. Het ingebouwde sjabloon bevat de A3-indeling en de vectoronderdelen. Projectfoto’s, logo’s en kaartachtergronden komen uit het eigen project.
 
+## Trafonummer en VL/AL wijzigen
+
+Kies een locatie en open **Geselecteerd blad**. Wijzig het trafonummer of locatietype en klik op **Opslaan**. Als je een bestaande alternatieve locatie tot voorkeur maakt terwijl de trafo al een VL heeft, vraagt de plug-in om bevestiging en zet de oude VL om naar een AL.
+
 ## Foto’s en PDF’s
 
 Gebruik **Bladeren** of **Plakken** bij de locatiefoto. De foto vult het vaste vak met een centrale uitsnede. Een geplakte afbeelding wordt bij het opslaan als PNG naast de DWG bewaard in `Stationlocaties-fotos`. Bij een onopgeslagen DWG of een map zonder schrijfrechten gebruikt de plug-in een lokale fotomap.

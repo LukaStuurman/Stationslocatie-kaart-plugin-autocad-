@@ -7,6 +7,8 @@ using Autodesk.AutoCAD.Geometry;
 namespace Stationslocaties;
 
 internal sealed record StationSheet(string Name, int Number, int Alternative, string Layer);
+internal sealed record StationSheetChange(StationSheet Before, StationSheet After);
+internal sealed record StationEditPlan(StationSheet Target, StationSheetChange[] Changes);
 
 internal sealed record StationFields(string Project, string Area, string Municipality, string ProjectNumber,
     string ClientNumber, string Drafter, string Date, string Address, string Notes, string DrawingNumber, string Photo)
@@ -62,13 +64,37 @@ internal static class StationLocationSheets
         if (preferred && sameStation.Any(sheet => sheet.Alternative == 0))
             throw new InvalidOperationException($"Trafo {number} heeft al een voorkeurslocatie.");
         var alternative = preferred ? 0 : sameStation.Select(sheet => sheet.Alternative).DefaultIfEmpty().Max() + 1;
-        var suffix = alternative switch { 0 => "VL", 1 => "AL", _ => "AL" + alternative };
+        var suffix = SheetSuffix(alternative);
         var baseLayer = "TB_STATION_" + number + "_" + suffix;
         using var tr = db.TransactionManager.StartTransaction();
         var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
         var layer = baseLayer;
         for (var serial = 2; layers.Has(layer); serial++) layer = baseLayer + "_" + serial;
         return new($"Trafo {number} {suffix}", number, alternative, layer);
+    }
+
+    private static string SheetSuffix(int alternative) => alternative switch { 0 => "VL", 1 => "AL", _ => "AL" + alternative };
+
+    internal static StationEditPlan PlanEdit(IReadOnlyList<StationSheet> sheets, StationSheet sheet, int number, bool preferred)
+    {
+        if (!sheets.Contains(sheet))
+            throw new InvalidOperationException("De geselecteerde locatie is gewijzigd of verwijderd.");
+        if (sheet.Number == number && preferred == (sheet.Alternative == 0))
+            return new(sheet, []);
+
+        var others = sheets.Where(item => item.Number == number && item != sheet).ToArray();
+        var nextAlternative = others.Select(item => item.Alternative).DefaultIfEmpty().Max() + 1;
+        StationSheet Change(StationSheet old, int alternative) =>
+            old with { Number = number, Alternative = alternative, Name = $"Trafo {number} {SheetSuffix(alternative)}" };
+
+        var target = Change(sheet, preferred ? 0 : nextAlternative);
+        var changes = new List<StationSheetChange> { new(sheet, target) };
+        if (preferred && others.FirstOrDefault(item => item.Alternative == 0) is { } incumbent)
+        {
+            var alternative = sheet.Number == number && sheet.Alternative > 0 ? sheet.Alternative : nextAlternative;
+            changes.Add(new(incumbent, Change(incumbent, alternative)));
+        }
+        return new(target, changes.ToArray());
     }
 
     internal static string DefaultDrawingNumber(StationSheet sheet) =>
@@ -349,16 +375,67 @@ internal static class StationLocationSheets
         tr.Commit();
     }
 
-    internal static void Edit(Document doc, StationSheet sheet, StationFields fields)
+    internal static void Edit(Document doc, StationEditPlan plan, StationFields fields)
     {
         var db = doc.Database;
-        using var tr = db.TransactionManager.StartTransaction();
-        var layout = GetLayout(db, tr, sheet.Name);
-        Center(tr, MapViewport(tr, layout), LocationBlock(tr, ModelBlocks(db, tr), sheet).Position);
-        WriteFields(db, tr, layout, fields);
-        WriteSharedProject(db, tr, fields);
-        RefreshOverview(db, tr);
-        tr.Commit();
+        var layouts = LayoutManager.Current;
+        var sources = plan.Changes.Select(change => change.Before.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var change in plan.Changes)
+            if (layouts.LayoutExists(change.After.Name) && !sources.Contains(change.After.Name))
+                throw new InvalidOperationException($"Er bestaat al een ander blad met de naam '{change.After.Name}'.");
+
+        var renames = new Stack<(string From, string To)>();
+        void Rename(string from, string to)
+        {
+            layouts.RenameLayout(from, to);
+            renames.Push((from, to));
+        }
+
+        try
+        {
+            // Temporary names also support swapping a VL and AL within the same station.
+            var pending = plan.Changes.Select(change =>
+                (Change: change, Temp: "Stationlocaties-" + Guid.NewGuid().ToString("N"))).ToArray();
+            foreach (var item in pending) Rename(item.Change.Before.Name, item.Temp);
+            foreach (var item in pending) Rename(item.Temp, item.Change.After.Name);
+
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (var change in plan.Changes)
+            {
+                var changedLayout = GetLayout(db, tr, change.After.Name, OpenMode.ForWrite);
+                WriteMetadata(db, tr, changedLayout, change.After);
+                if (change.After != plan.Target)
+                {
+                    var drawingNumber = ReadFields(db, change.After).DrawingNumber;
+                    if (string.Equals(drawingNumber, DefaultDrawingNumber(change.Before), StringComparison.Ordinal))
+                        SetAttributes(db, tr, changedLayout, new Dictionary<string, string>
+                        {
+                            ["TEKENINGNUMMER"] = DefaultDrawingNumber(change.After)
+                        });
+                }
+                else if (string.IsNullOrWhiteSpace(fields.DrawingNumber) ||
+                    string.Equals(fields.DrawingNumber, DefaultDrawingNumber(change.Before), StringComparison.Ordinal))
+                    fields = fields with { DrawingNumber = DefaultDrawingNumber(change.After) };
+            }
+            var layout = GetLayout(db, tr, plan.Target.Name);
+            Center(tr, MapViewport(tr, layout), LocationBlock(tr, ModelBlocks(db, tr), plan.Target).Position);
+            WriteFields(db, tr, layout, fields);
+            WriteSharedProject(db, tr, fields);
+            RefreshOverview(db, tr);
+            tr.Commit();
+        }
+        catch
+        {
+            while (renames.TryPop(out var rename))
+            {
+                try { layouts.RenameLayout(rename.To, rename.From); }
+                catch (Exception ex)
+                {
+                    doc.Editor.WriteMessage($"\nBladnaam '{rename.From}' herstellen is mislukt. {ex.Message}");
+                }
+            }
+            throw;
+        }
     }
 
     internal static IReadOnlyList<SheetRow> ReadSheetRows(Database db, IReadOnlyList<StationSheet> sheets)
