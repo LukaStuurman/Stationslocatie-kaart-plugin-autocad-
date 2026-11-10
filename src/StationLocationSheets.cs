@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.IO;
-using System.IO.Compression;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
@@ -43,7 +42,6 @@ internal sealed record StationFields(string Project, string Area, string Municip
 
 internal static class StationLocationSheets
 {
-    internal const string TemplateLayout = "Trafo 1 VL";
     internal const string OverviewName = "Totaal";
     private const string Tag = "TECHBASE_STATIONBLAD";
     private const string Symbol = "TB_STATION_TRAFO";
@@ -172,17 +170,12 @@ internal static class StationLocationSheets
                 throw new InvalidOperationException("De modelruimte bevat al losse TRAFO-blokken. Gebruik een projecttekening met alleen de achtergrondkaarten voor deze werkstroom.");
         }
 
-        var step = "ingebouwd sjabloon openen";
+        var step = "layouttabbladen aanmaken";
         var detailCreated = false;
         var overviewCreated = false;
         var committed = false;
         try
         {
-            using var source = new Database(false, true);
-            LoadTemplate(source);
-            using var sourceTr = source.TransactionManager.StartTransaction();
-            var sample = GetLayout(source, sourceTr, TemplateLayout);
-            var overviewSample = newOverview ? GetLayout(source, sourceTr, OverviewName) : null;
             step = "layouttabbladen aanmaken";
             layouts.CreateLayout(sheet.Name);
             detailCreated = true;
@@ -194,12 +187,12 @@ internal static class StationLocationSheets
             using var tr = db.TransactionManager.StartTransaction();
             var layout = GetLayout(db, tr, sheet.Name, OpenMode.ForWrite);
             step = "detailblad en kaartvenster opbouwen";
-            var viewport = CloneSheet(db, tr, source, sourceTr, sample, layout);
-            if (overviewSample != null)
+            var viewport = NativeStationGeometry.AppendSheet(db, tr, layout, false);
+            if (newOverview)
             {
                 step = "blad Totaal opbouwen";
                 var overview = GetLayout(db, tr, OverviewName, OpenMode.ForWrite);
-                CloneSheet(db, tr, source, sourceTr, overviewSample, overview);
+                NativeStationGeometry.AppendSheet(db, tr, overview, true);
                 overview.CreateExtensionDictionary();
                 var dictionary = (DBDictionary)tr.GetObject(overview.ExtensionDictionary, OpenMode.ForWrite);
                 var marker = new Xrecord();
@@ -216,7 +209,7 @@ internal static class StationLocationSheets
 
             step = "trafoblok plaatsen";
             var layerId = Layer(db, tr, sheet.Layer, true);
-            var blockId = ImportSymbol(db, tr, source, sourceTr);
+            var blockId = NativeStationGeometry.GetSymbol(db, tr, Symbol);
             var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
             var reference = new BlockReference(point, blockId) { LayerId = layerId, Rotation = rotation };
             model.AppendEntity(reference);
@@ -230,7 +223,6 @@ internal static class StationLocationSheets
             WriteSharedProject(db, tr, fields);
             step = "overzicht en laagzichtbaarheid bijwerken";
             RefreshOverview(db, tr);
-            sourceTr.Commit();
             tr.Commit();
             committed = true;
         }
@@ -334,78 +326,6 @@ internal static class StationLocationSheets
         return matches[0];
     }
 
-    private static void LoadTemplate(Database source)
-    {
-        var temporary = Directory.CreateTempSubdirectory("Stationslocaties-");
-        var path = Path.Combine(temporary.FullName, "StationTemplate.dxf");
-        var log = Path.Combine(temporary.FullName, "StationTemplate.log");
-        try
-        {
-            using (var resource = typeof(StationLocationSheets).Assembly.GetManifestResourceStream("StationTemplate.dxf.gz")
-                ?? throw new InvalidOperationException("Het ingebouwde stationssjabloon ontbreekt."))
-            using (var gzip = new GZipStream(resource, CompressionMode.Decompress))
-            using (var file = File.Create(path))
-                gzip.CopyTo(file);
-            source.DxfIn(path, log);
-        }
-        finally
-        {
-            File.Delete(path);
-            File.Delete(log);
-            temporary.Delete();
-        }
-    }
-
-    private static Viewport CloneSheet(Database db, Transaction tr, Database source, Transaction sourceTr, Layout sample, Layout layout)
-    {
-        var sampleViewport = MapViewport(sourceTr, sample);
-        var sourceClip = sampleViewport.NonRectClipOn ? sampleViewport.NonRectClipEntityId : ObjectId.Null;
-        var selected = Entities(sourceTr, sample).Where(entity => entity is not Viewport && entity.ObjectId != sourceClip).ToArray();
-        _ = Title(sourceTr, sample);
-        using var settings = new PlotSettings(false);
-        settings.CopyFrom(sample);
-        layout.CopyFrom(settings);
-        var map = new IdMapping();
-        source.WblockCloneObjects(new ObjectIdCollection(selected.Select(entity => entity.ObjectId).ToArray()),
-            layout.BlockTableRecordId, map, DuplicateRecordCloning.Ignore, false);
-        var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForWrite);
-        // AutoCAD owns the viewport and its clip in the destination layout from creation.
-        var viewport = new Viewport
-        {
-            CenterPoint = sampleViewport.CenterPoint,
-            Width = sampleViewport.Width,
-            Height = sampleViewport.Height,
-            LayerId = Layer(db, tr, sampleViewport.Layer)
-        };
-        space.AppendEntity(viewport);
-        tr.AddNewlyCreatedDBObject(viewport, true);
-        var targetClip = ObjectId.Null;
-        if (!sourceClip.IsNull)
-        {
-            if (!IsLive(sourceClip) || sourceTr.GetObject(sourceClip, OpenMode.ForRead) is not Polyline boundary)
-                throw new InvalidOperationException("Het ingebouwde sjabloon mist een bruikbare kaartuitsnede.");
-            var clip = new Polyline(boundary.NumberOfVertices)
-            {
-                LayerId = Layer(db, tr, boundary.Layer),
-                Normal = boundary.Normal,
-                Elevation = boundary.Elevation
-            };
-            for (var i = 0; i < boundary.NumberOfVertices; i++)
-                clip.AddVertexAt(i, boundary.GetPoint2dAt(i), boundary.GetBulgeAt(i),
-                    boundary.GetStartWidthAt(i), boundary.GetEndWidthAt(i));
-            clip.Closed = boundary.Closed;
-            targetClip = space.AppendEntity(clip);
-            tr.AddNewlyCreatedDBObject(clip, true);
-            viewport.NonRectClipEntityId = targetClip;
-            viewport.NonRectClipOn = true;
-        }
-        var cloned = selected.ToDictionary(entity => entity.ObjectId, entity => map[entity.ObjectId].Value);
-        cloned.Add(sampleViewport.ObjectId, viewport.ObjectId);
-        if (!targetClip.IsNull) cloned.Add(sourceClip, targetClip);
-        PreserveDrawOrder(sourceTr, sample, tr, layout, cloned);
-        return viewport;
-    }
-
     private static Layout GetLayout(Database db, Transaction tr, string name, OpenMode mode = OpenMode.ForRead)
     {
         var dictionary = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
@@ -436,36 +356,8 @@ internal static class StationLocationSheets
     }
 
     private static BlockReference Title(Transaction tr, Layout layout) =>
-        Entities(tr, layout).OfType<BlockReference>().SingleOrDefault(block => BlockName(tr, block) == TitleBlock)
+        Entities(tr, layout).OfType<BlockReference>().SingleOrDefault(block => BlockName(tr, block) is TitleBlock or NativeStationGeometry.TitleName)
         ?? throw new InvalidOperationException($"Layout ‘{layout.LayoutName}’ mist ‘{TitleBlock}’.");
-
-    private static ObjectId ImportSymbol(Database db, Transaction tr, Database source, Transaction sourceTr)
-    {
-        var destination = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-        if (destination.Has(Symbol)) return destination[Symbol];
-        var blocks = (BlockTable)sourceTr.GetObject(source.BlockTableId, OpenMode.ForRead);
-        if (!blocks.Has("TRAFO")) throw new InvalidOperationException("Het TRAFO-blok ontbreekt in het sjabloon.");
-        var original = (BlockTableRecord)sourceTr.GetObject(blocks["TRAFO"], OpenMode.ForWrite);
-        var outline = original.Cast<ObjectId>().Where(IsLive).Select(id => sourceTr.GetObject(id, OpenMode.ForRead))
-            .OfType<Polyline>().SingleOrDefault(line => line.Layer.Equals("MSR~Gepr_Lin35", StringComparison.OrdinalIgnoreCase)
-                && line.NumberOfVertices >= 4)
-            ?? throw new InvalidOperationException("De kastcontour ontbreekt in het TRAFO-blok van het sjabloon.");
-        var bounds = outline.GeometricExtents;
-        var center = bounds.MinPoint + (bounds.MaxPoint - bounds.MinPoint) * 0.5;
-        original.Name = Symbol + "_BRON";
-        var map = new IdMapping();
-        source.WblockCloneObjects(new ObjectIdCollection(new[] { original.ObjectId }), db.BlockTableId,
-            map, DuplicateRecordCloning.Ignore, false);
-        // A nested reference retains the source dimensions and makes the cabinet centre the placement point.
-        if (!destination.IsWriteEnabled) destination.UpgradeOpen();
-        var centered = new BlockTableRecord { Name = Symbol };
-        var id = destination.Add(centered);
-        tr.AddNewlyCreatedDBObject(centered, true);
-        var insert = new BlockReference(Point3d.Origin - (center - original.Origin), map[original.ObjectId].Value);
-        centered.AppendEntity(insert);
-        tr.AddNewlyCreatedDBObject(insert, true);
-        return id;
-    }
 
     private static ObjectId Layer(Database db, Transaction tr, string name, bool location = false)
     {
@@ -589,18 +481,6 @@ internal static class StationLocationSheets
                 Convert.ToInt32(values[2].Value, CultureInfo.InvariantCulture), (string)values[3].Value));
         }
         return result;
-    }
-
-    private static void PreserveDrawOrder(Transaction sourceTr, Layout sample, Transaction tr, Layout layout,
-        Dictionary<ObjectId, ObjectId> cloned)
-    {
-        var sourceSpace = (BlockTableRecord)sourceTr.GetObject(sample.BlockTableRecordId, OpenMode.ForRead);
-        var targetSpace = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
-        var sourceOrder = (DrawOrderTable)sourceTr.GetObject(sourceSpace.DrawOrderTableId, OpenMode.ForRead);
-        var targetOrder = (DrawOrderTable)tr.GetObject(targetSpace.DrawOrderTableId, OpenMode.ForWrite);
-        var ids = sourceOrder.GetFullDrawOrder(0).Cast<ObjectId>()
-            .Where(cloned.ContainsKey).Select(id => cloned[id]).Where(IsLive);
-        targetOrder.MoveToTop(new ObjectIdCollection(ids.ToArray()));
     }
 
     private static void WriteFields(Database db, Transaction tr, Layout layout, StationFields fields)

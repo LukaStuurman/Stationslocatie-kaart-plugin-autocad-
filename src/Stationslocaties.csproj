@@ -9,10 +9,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <PlatformTarget>x64</PlatformTarget>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
   </PropertyGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Resources/StationTemplate.dxf.gz" LogicalName="StationTemplate.dxf.gz" />
+    <EmbeddedResource Include="Resources/StationGeometry.json.gz" LogicalName="StationGeometry.json.gz" />
     <PackageReference Include="AutoCAD.NET" Version="$(ApiVersion)" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 </Project>
