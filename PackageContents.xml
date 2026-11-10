@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ApplicationPackage SchemaVersion="1.0" AutodeskProduct="AutoCAD" Name="Stationlocaties"
-  Description="Zelfstandige stationlocatiekaarten" AppVersion="1.4.8"
-  ProductCode="{B3134E7E-D506-4003-BDF4-6FBB14990ADA}" UpgradeCode="{FEAFC23B-1FE6-45AA-9E03-9F5B7870E5B3}">
+  Description="Zelfstandige stationlocatiekaarten" AppVersion="1.4.9"
+  ProductCode="{86EAC452-F19C-4AD9-8913-33BE3A189385}" UpgradeCode="{FEAFC23B-1FE6-45AA-9E03-9F5B7870E5B3}">
   <CompanyDetails Name="Techbase" />
   <Components>
     <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.1" />

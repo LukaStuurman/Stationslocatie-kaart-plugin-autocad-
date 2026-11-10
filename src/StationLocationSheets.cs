@@ -693,29 +693,30 @@ internal static class StationLocationSheets
         }
         var blocks = stationBlocks.ToLookup(block => block.Layer, StringComparer.OrdinalIgnoreCase);
         var locations = sheets.Select(sheet => (Sheet: sheet, Block: RequireLocationBlock(blocks[sheet.Layer], sheet))).ToArray();
-        var layout = HasOverview(db, tr) ? GetLayout(db, tr, OverviewName) : null;
-        var viewport = layout == null ? null : FindMapViewport(tr, layout);
-        var scale = viewport is { Height: > 0, ViewHeight: > 0 }
-            ? Math.Max(500, (int)Math.Round(viewport.ViewHeight / viewport.Height * 1000))
-            : 500;
-        if (updateOverview && layout != null)
-            viewport ??= NativeStationGeometry.AppendMapViewport(db, tr, layout, true);
-        if (updateOverview && layout != null && viewport != null && locations.Length > 0)
+        const double radius = 20;
+        const double textHeight = 10;
+        const double labelGap = 3;
+        if (updateOverview && HasOverview(db, tr))
         {
-            const double margin = 35;
-            var left = locations.Min(location => location.Block.Position.X) - margin;
-            var right = locations.Max(location => location.Block.Position.X) + margin + 45;
-            var bottom = locations.Min(location => location.Block.Position.Y) - margin;
-            var top = locations.Max(location => location.Block.Position.Y) + margin;
-            var needed = Math.Max((right - left) / viewport.Width, (top - bottom) / viewport.Height) * 1000;
-            var step = needed <= 1000 ? 250 : needed <= 5000 ? 500 : 1000;
-            scale = Math.Max(500, (int)Math.Ceiling(needed / step) * step);
-            Center(tr, viewport, new Point3d((left + right) / 2, (bottom + top) / 2, 0), scale);
-            var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-            var frozen = sheets.Select(sheet => layers[sheet.Layer]).Append(overviewLayer)
-                .Where(viewport.IsLayerFrozenInViewport).ToArray();
-            if (frozen.Length > 0) viewport.ThawLayersInViewport(frozen.GetEnumerator());
-            SetAttributes(db, tr, layout, new Dictionary<string, string> { ["SCHAAL"] = "1:" + scale });
+            var layout = GetLayout(db, tr, OverviewName);
+            var viewport = FindMapViewport(tr, layout) ?? NativeStationGeometry.AppendMapViewport(db, tr, layout, true);
+            if (locations.Length > 0)
+            {
+                const double margin = 35;
+                var left = locations.Min(location => location.Block.Position.X) - margin;
+                var right = locations.Max(location => location.Block.Position.X) + margin + 45;
+                var bottom = locations.Min(location => location.Block.Position.Y) - margin;
+                var top = locations.Max(location => location.Block.Position.Y) + margin;
+                var needed = Math.Max((right - left) / viewport.Width, (top - bottom) / viewport.Height) * 1000;
+                var step = needed <= 1000 ? 250 : needed <= 5000 ? 500 : 1000;
+                var scale = Math.Max(500, (int)Math.Ceiling(needed / step) * step);
+                Center(tr, viewport, new Point3d((left + right) / 2, (bottom + top) / 2, 0), scale);
+                var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                var frozen = sheets.Select(sheet => layers[sheet.Layer]).Append(overviewLayer)
+                    .Where(viewport.IsLayerFrozenInViewport).ToArray();
+                if (frozen.Length > 0) viewport.ThawLayersInViewport(frozen.GetEnumerator());
+                SetAttributes(db, tr, layout, new Dictionary<string, string> { ["SCHAAL"] = "1:" + scale });
+            }
         }
 
         var circles = markers.OfType<Circle>().ToLookup(circle => circle.Center);
@@ -729,15 +730,14 @@ internal static class StationLocationSheets
             return color.CompareTo(red) == 0;
         }
 
-        var height = scale * 0.003;
         foreach (var location in locations)
         {
             var point = location.Block.Position;
-            var labelPoint = point + new Vector3d(height * 3, height, 0);
+            var labelPoint = point + new Vector3d(radius + labelGap, 0, 0);
             var label = labels[location.Sheet.Name].FirstOrDefault(item =>
-                item.Location == labelPoint && item.TextHeight == height && item.Attachment == AttachmentPoint.MiddleLeft);
+                item.Location == labelPoint && item.TextHeight == textHeight && item.Attachment == AttachmentPoint.MiddleLeft);
             var circle = circles[point].FirstOrDefault(item => !retained.Contains(item.ObjectId) &&
-                item.Radius == 20.0 && item.Normal == Vector3d.ZAxis && HasRedColor(item));
+                item.Radius == radius && item.Normal == Vector3d.ZAxis && HasRedColor(item));
 
             if (label != null) retained.Add(label.ObjectId);
             if (circle != null) retained.Add(circle.ObjectId);
@@ -746,14 +746,14 @@ internal static class StationLocationSheets
             if (!model.IsWriteEnabled) model.UpgradeOpen();
             if (label == null)
             {
-                label = new MText { Location = labelPoint, TextHeight = height, Contents = location.Sheet.Name,
+                label = new MText { Location = labelPoint, TextHeight = textHeight, Contents = location.Sheet.Name,
                     LayerId = overviewLayer, Attachment = AttachmentPoint.MiddleLeft };
                 model.AppendEntity(label);
                 tr.AddNewlyCreatedDBObject(label, true);
             }
             if (circle == null)
             {
-                circle = new Circle(point, Vector3d.ZAxis, 20.0) { LayerId = overviewLayer, Color = red };
+                circle = new Circle(point, Vector3d.ZAxis, radius) { LayerId = overviewLayer, Color = red };
                 model.AppendEntity(circle);
                 tr.AddNewlyCreatedDBObject(circle, true);
             }
