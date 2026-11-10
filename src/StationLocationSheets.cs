@@ -218,10 +218,8 @@ internal static class StationLocationSheets
         var layouts = LayoutManager.Current;
         if (layouts.LayoutExists(sheet.Name))
             throw new InvalidOperationException($"Layout ‘{sheet.Name}’ bestaat al.");
-        bool hasOverview;
         using (var check = db.TransactionManager.StartTransaction())
         {
-            hasOverview = HasOverview(db, check);
             if (ModelBlocks(db, check).Any(block => BlockName(check, block).Equals("TRAFO", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("De modelruimte bevat al losse TRAFO-blokken. Gebruik een projecttekening met alleen de achtergrondkaarten voor deze werkstroom.");
         }
@@ -255,7 +253,7 @@ internal static class StationLocationSheets
             step = "locatiefoto plaatsen";
             SetPhoto(db, tr, layout, fields.Photo);
             step = "overzicht en laagzichtbaarheid bijwerken";
-            RefreshOverview(db, tr);
+            RefreshMarkers(db, tr);
             AddLocationVisibility(db, tr, sheet, viewport, layerId);
             tr.Commit();
             committed = true;
@@ -282,7 +280,6 @@ internal static class StationLocationSheets
         try
         {
             EnableCreatedViewport(doc, sheet.Name);
-            if (hasOverview) EnableCreatedViewport(doc, OverviewName);
         }
         finally
         {
@@ -295,6 +292,11 @@ internal static class StationLocationSheets
         var db = doc.Database;
         if (HasOverview(db))
         {
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                RefreshMarkers(db, tr, updateOverview: true);
+                tr.Commit();
+            }
             OpenSheet(doc, OverviewName);
             return;
         }
@@ -323,7 +325,7 @@ internal static class StationLocationSheets
                 ["TEKENINGNUMMER"] = string.IsNullOrWhiteSpace(fields.Area) ? "Trafo-overzicht" : "Overzicht " + fields.Area
             });
             ClearRevisions(db, tr, overview);
-            RefreshOverview(db, tr);
+            RefreshMarkers(db, tr, updateOverview: true);
             tr.Commit();
         }
         catch
@@ -332,14 +334,14 @@ internal static class StationLocationSheets
             catch (Exception cleanupError) { doc.Editor.WriteMessage("\nTotaal opruimen: " + cleanupError.Message); }
             throw;
         }
-        OpenSheet(doc, OverviewName, refreshOverview: false);
+        OpenSheet(doc, OverviewName);
     }
 
     private static void EnableCreatedViewport(Document doc, string layoutName)
     {
         try
         {
-            OpenSheet(doc, layoutName, refreshOverview: false);
+            OpenSheet(doc, layoutName);
         }
         catch (Exception ex)
         {
@@ -365,7 +367,7 @@ internal static class StationLocationSheets
         }
     }
 
-    internal static void OpenSheet(Document doc, string layoutName, bool refreshOverview = true)
+    internal static void OpenSheet(Document doc, string layoutName)
     {
         LayoutManager.Current.CurrentLayout = layoutName;
         if (Convert.ToInt32(Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("CVPORT")) != 1)
@@ -375,8 +377,6 @@ internal static class StationLocationSheets
         var db = doc.Database;
         using var tr = db.TransactionManager.StartTransaction();
         var layout = GetLayout(db, tr, layoutName);
-        if (refreshOverview && layoutName == OverviewName && HasOverview(db, tr))
-            RefreshOverview(db, tr);
         DisableLayoutGrid(tr, layout);
         var viewport = MapViewport(tr, layout);
         if (!viewport.On)
@@ -407,7 +407,7 @@ internal static class StationLocationSheets
             block.UpgradeOpen();
             block.Erase();
         }
-        RefreshOverview(db, tr, sheet.Name);
+        RefreshMarkers(db, tr, sheet.Name);
         layouts.DeleteLayout(sheet.Name);
         tr.Commit();
     }
@@ -458,7 +458,7 @@ internal static class StationLocationSheets
             Center(tr, MapViewport(tr, layout), LocationBlock(tr, ModelBlocks(db, tr), plan.Target).Position);
             WriteFields(db, tr, layout, fields);
             WriteSharedProject(db, tr, fields);
-            RefreshOverview(db, tr);
+            RefreshMarkers(db, tr);
             tr.Commit();
         }
         catch
@@ -677,7 +677,7 @@ internal static class StationLocationSheets
             viewport.FreezeLayersInViewport(toFreeze.GetEnumerator());
     }
 
-    private static void RefreshOverview(Database db, Transaction tr, string? excluded = null)
+    private static void RefreshMarkers(Database db, Transaction tr, string? excluded = null, bool updateOverview = false)
     {
         var sheets = ReadSheets(db, tr, excluded);
         var overviewLayer = Layer(db, tr, OverviewLayer);
@@ -693,11 +693,15 @@ internal static class StationLocationSheets
         }
         var blocks = stationBlocks.ToLookup(block => block.Layer, StringComparer.OrdinalIgnoreCase);
         var locations = sheets.Select(sheet => (Sheet: sheet, Block: RequireLocationBlock(blocks[sheet.Layer], sheet))).ToArray();
-        var scale = 500;
-        if (locations.Length > 0 && HasOverview(db, tr))
+        var layout = HasOverview(db, tr) ? GetLayout(db, tr, OverviewName) : null;
+        var viewport = layout == null ? null : FindMapViewport(tr, layout);
+        var scale = viewport is { Height: > 0, ViewHeight: > 0 }
+            ? Math.Max(500, (int)Math.Round(viewport.ViewHeight / viewport.Height * 1000))
+            : 500;
+        if (updateOverview && layout != null)
+            viewport ??= NativeStationGeometry.AppendMapViewport(db, tr, layout, true);
+        if (updateOverview && layout != null && viewport != null && locations.Length > 0)
         {
-            var layout = GetLayout(db, tr, OverviewName);
-            var viewport = FindMapViewport(tr, layout) ?? NativeStationGeometry.AppendMapViewport(db, tr, layout, true);
             const double margin = 35;
             var left = locations.Min(location => location.Block.Position.X) - margin;
             var right = locations.Max(location => location.Block.Position.X) + margin + 45;

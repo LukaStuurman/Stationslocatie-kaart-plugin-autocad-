@@ -214,7 +214,7 @@ internal sealed class StationLocationDialog : Form
         var delete = Add("Locatie verwijderen", StationLocationAction.Delete, false);
         Add("Alle bladen bewerken", StationLocationAction.EditAll, sheets.Count > 0);
         Add("Projectgegevens", StationLocationAction.Project, sheets.Count > 0);
-        Add(hasOverview ? "Totaal bijwerken" : "Totaal maken", StationLocationAction.Overview, sheets.Count > 0 || hasOverview);
+        Add(hasOverview ? "Totaal vernieuwen" : "Totaal maken", StationLocationAction.Overview, sheets.Count > 0 || hasOverview);
         Add("Bladen plotten", StationLocationAction.Plot, sheets.Count > 0 || hasOverview);
         var close = new Button { Text = "Sluiten", AutoSize = true, DialogResult = DialogResult.Cancel };
         actions.Controls.Add(close);
