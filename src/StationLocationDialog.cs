@@ -102,11 +102,11 @@ public sealed class Plugin
                                 StationLocationSheets.UpdateProject(doc.Database, input.Fields);
                         break;
                     case StationLocationAction.Open when selected != null:
-                        LayoutManager.Current.CurrentLayout = selected.Name;
+                        StationLocationSheets.OpenSheet(doc, selected.Name);
                         doc.Editor.Regen();
                         return;
                     case StationLocationAction.Overview:
-                        LayoutManager.Current.CurrentLayout = StationLocationSheets.OverviewName;
+                        StationLocationSheets.OpenSheet(doc, StationLocationSheets.OverviewName);
                         doc.Editor.Regen();
                         return;
                 }

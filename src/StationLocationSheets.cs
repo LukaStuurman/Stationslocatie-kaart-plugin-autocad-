@@ -244,6 +244,46 @@ internal static class StationLocationSheets
             doc.Editor.WriteMessage("\n" + ex);
             throw new InvalidOperationException($"Plaatsen van ‘{sheet.Name}’ mislukt bij {step}. {ex.Message}", ex);
         }
+
+        var previousLayout = layouts.CurrentLayout;
+        try
+        {
+            EnableCreatedViewport(doc, sheet.Name);
+            if (newOverview) EnableCreatedViewport(doc, OverviewName);
+        }
+        finally
+        {
+            layouts.CurrentLayout = previousLayout;
+        }
+    }
+
+    private static void EnableCreatedViewport(Document doc, string layoutName)
+    {
+        try
+        {
+            OpenSheet(doc, layoutName);
+        }
+        catch (Exception ex)
+        {
+            doc.Editor.WriteMessage($"\nBlad ‘{layoutName}’ is aangemaakt. Open het blad om het kaartvenster opnieuw in te schakelen. {ex}");
+        }
+    }
+
+    internal static void OpenSheet(Document doc, string layoutName)
+    {
+        LayoutManager.Current.CurrentLayout = layoutName;
+        if (Convert.ToInt32(Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("CVPORT")) != 1)
+            doc.Editor.SwitchToPaperSpace();
+
+        var db = doc.Database;
+        using var tr = db.TransactionManager.StartTransaction();
+        var viewport = MapViewport(tr, GetLayout(db, tr, layoutName));
+        if (!viewport.On)
+        {
+            viewport.UpgradeOpen();
+            viewport.On = true;
+        }
+        tr.Commit();
     }
 
     internal static void Edit(Document doc, StationSheet sheet, StationFields fields)
@@ -383,7 +423,6 @@ internal static class StationLocationSheets
         viewport.ViewTarget = point;
         viewport.ViewCenter = Point2d.Origin;
         viewport.ViewHeight = viewport.Height * denominator / 1000.0;
-        viewport.On = true;
         viewport.Locked = true;
     }
 
