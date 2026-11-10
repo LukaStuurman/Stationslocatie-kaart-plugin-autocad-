@@ -46,23 +46,7 @@ public sealed class Plugin
                                 fields = fields with { DrawingNumber = StationLocationSheets.DefaultDrawingNumber(sheet) };
                             LayoutManager.Current.CurrentLayout = "Model";
                             var editor = doc.Editor;
-                            var pick = editor.GetPoint("\nKlik op het midden van de trafo: ");
-                            if (pick.Status != PromptStatus.OK) break;
-                            var direction = editor.GetPoint(new PromptPointOptions("\nKlik voor de draairichting (Enter voor 0 graden): ")
-                            {
-                                AllowNone = true, UseBasePoint = true, BasePoint = pick.Value
-                            });
-                            if (direction.Status is not (PromptStatus.OK or PromptStatus.None)) break;
-                            var ucs = editor.CurrentUserCoordinateSystem;
-                            var point = pick.Value.TransformBy(ucs);
-                            var rotation = 0.0;
-                            if (direction.Status == PromptStatus.OK)
-                            {
-                                var delta = direction.Value.TransformBy(ucs) - point;
-                                if (Math.Abs(delta.X) + Math.Abs(delta.Y) < 1e-8)
-                                    throw new InvalidOperationException("Kies voor de draairichting een tweede punt naast de trafo.");
-                                rotation = Math.Atan2(delta.Y, delta.X);
-                            }
+                            if (!StationLocationSheets.PickLocation(doc, out var point, out var rotation)) break;
                             if (input.LookupAddress && string.IsNullOrWhiteSpace(fields.Address))
                             {
                                 editor.WriteMessage("\nDichtstbijzijnd adres ophalen bij PDOK…");
@@ -101,6 +85,15 @@ public sealed class Plugin
                             if (AcApp.ShowModalDialog(input) == DialogResult.OK)
                                 StationLocationSheets.UpdateProject(doc.Database, input.Fields);
                         break;
+                    case StationLocationAction.Delete when selected != null:
+                        if (MessageBox.Show($"Locatie en blad ‘{selected.Name}’ verwijderen?", "Stationlocaties",
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                        {
+                            StationLocationSheets.Delete(doc, selected);
+                            selected = null;
+                            doc.Editor.Regen();
+                        }
+                        break;
                     case StationLocationAction.Open when selected != null:
                         StationLocationSheets.OpenSheet(doc, selected.Name);
                         doc.Editor.Regen();
@@ -120,7 +113,7 @@ public sealed class Plugin
     }
 }
 
-internal enum StationLocationAction { Add, Edit, EditAll, Project, Open, Overview }
+internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview }
 
 internal sealed class StationLocationDialog : Form
 {
@@ -132,8 +125,8 @@ internal sealed class StationLocationDialog : Form
     {
         Text = "Techbase | Stationlocaties";
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(900, 380);
-        MinimumSize = new Size(800, 350);
+        ClientSize = new Size(1020, 380);
+        MinimumSize = new Size(915, 350);
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Padding = new Padding(14) };
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -174,14 +167,15 @@ internal sealed class StationLocationDialog : Form
         Add("Locatie plaatsen", StationLocationAction.Add);
         var edit = Add("Geselecteerd blad", StationLocationAction.Edit, false);
         var open = Add("Open blad", StationLocationAction.Open, false);
+        var delete = Add("Locatie verwijderen", StationLocationAction.Delete, false);
         Add("Alle bladen bewerken", StationLocationAction.EditAll, sheets.Count > 0);
         Add("Projectgegevens", StationLocationAction.Project, sheets.Count > 0);
         Add("Open Totaal", StationLocationAction.Overview, sheets.Count > 0);
         var close = new Button { Text = "Sluiten", AutoSize = true, DialogResult = DialogResult.Cancel };
         actions.Controls.Add(close);
         CancelButton = close;
-        locations.SelectedIndexChanged += (_, _) => edit.Enabled = open.Enabled = Selected != null;
-        Shown += (_, _) => edit.Enabled = open.Enabled = Selected != null;
+        locations.SelectedIndexChanged += (_, _) => edit.Enabled = open.Enabled = delete.Enabled = Selected != null;
+        Shown += (_, _) => edit.Enabled = open.Enabled = delete.Enabled = Selected != null;
         locations.DoubleClick += (_, _) => { if (Selected != null) Choose(StationLocationAction.Open); };
         layout.Controls.Add(actions, 0, 2);
         Controls.Add(layout);

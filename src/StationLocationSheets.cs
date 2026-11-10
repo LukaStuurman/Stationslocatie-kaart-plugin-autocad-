@@ -63,7 +63,12 @@ internal static class StationLocationSheets
             throw new InvalidOperationException($"Trafo {number} heeft al een voorkeurslocatie.");
         var alternative = preferred ? 0 : sameStation.Select(sheet => sheet.Alternative).DefaultIfEmpty().Max() + 1;
         var suffix = alternative switch { 0 => "VL", 1 => "AL", _ => "AL" + alternative };
-        return new($"Trafo {number} {suffix}", number, alternative, "TB_STATION_" + number + "_" + suffix);
+        var baseLayer = "TB_STATION_" + number + "_" + suffix;
+        using var tr = db.TransactionManager.StartTransaction();
+        var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        var layer = baseLayer;
+        for (var serial = 2; layers.Has(layer); serial++) layer = baseLayer + "_" + serial;
+        return new($"Trafo {number} {suffix}", number, alternative, layer);
     }
 
     internal static string DefaultDrawingNumber(StationSheet sheet) =>
@@ -152,6 +157,18 @@ internal static class StationLocationSheets
             Field("PROJECTNR.OPDR."), Field("GET"), Field("TDD"), Field("OVERIGE2"), Field("OVERIGE1"), Field("TEKENINGNUMMER"), path);
     }
 
+    internal static bool PickLocation(Document doc, out Point3d point, out double rotation)
+    {
+        var db = doc.Database;
+        using var tr = db.TransactionManager.StartTransaction();
+        using var preview = new BlockReference(Point3d.Origin, NativeStationGeometry.GetSymbol(db, tr, Symbol));
+        preview.SetDatabaseDefaults(db);
+        var accepted = new StationPlacementJig(preview).Pick(doc.Editor);
+        point = preview.Position;
+        rotation = preview.Rotation;
+        return accepted;
+    }
+
     internal static void Create(Document doc, StationSheet sheet, StationFields fields, Point3d point, double rotation)
     {
         var db = doc.Database;
@@ -216,7 +233,7 @@ internal static class StationLocationSheets
             tr.AddNewlyCreatedDBObject(reference, true);
             WriteMetadata(db, tr, layout, sheet);
             step = "detailkaart centreren";
-            Center(viewport, point);
+            Center(tr, viewport, point);
             step = "onderhoek en foto invullen";
             ClearRevisions(db, tr, layout);
             WriteFields(db, tr, layout, fields);
@@ -249,7 +266,7 @@ internal static class StationLocationSheets
         try
         {
             EnableCreatedViewport(doc, sheet.Name);
-            if (newOverview) EnableCreatedViewport(doc, OverviewName);
+            EnableCreatedViewport(doc, OverviewName);
         }
         finally
         {
@@ -261,7 +278,7 @@ internal static class StationLocationSheets
     {
         try
         {
-            OpenSheet(doc, layoutName);
+            OpenSheet(doc, layoutName, refreshOverview: false);
         }
         catch (Exception ex)
         {
@@ -269,7 +286,7 @@ internal static class StationLocationSheets
         }
     }
 
-    internal static void OpenSheet(Document doc, string layoutName)
+    internal static void OpenSheet(Document doc, string layoutName, bool refreshOverview = true)
     {
         LayoutManager.Current.CurrentLayout = layoutName;
         if (Convert.ToInt32(Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("CVPORT")) != 1)
@@ -277,12 +294,35 @@ internal static class StationLocationSheets
 
         var db = doc.Database;
         using var tr = db.TransactionManager.StartTransaction();
-        var viewport = MapViewport(tr, GetLayout(db, tr, layoutName));
+        var layout = GetLayout(db, tr, layoutName);
+        if (refreshOverview && layoutName == OverviewName && HasOverview(db, tr))
+            RefreshOverview(db, tr);
+        var viewport = MapViewport(tr, layout);
+        if (layoutName != OverviewName && ReadSheets(db, tr).FirstOrDefault(sheet => sheet.Name == layoutName) is { } location)
+            Center(tr, viewport, LocationBlock(tr, ModelBlocks(db, tr), location).Position);
         if (!viewport.On)
         {
-            viewport.UpgradeOpen();
+            if (!viewport.IsWriteEnabled) viewport.UpgradeOpen();
             viewport.On = true;
         }
+        tr.Commit();
+    }
+
+    internal static void Delete(Document doc, StationSheet sheet)
+    {
+        var layouts = LayoutManager.Current;
+        if (layouts.CurrentLayout == sheet.Name) layouts.CurrentLayout = "Model";
+        var db = doc.Database;
+        if (!List(db).Contains(sheet))
+            throw new InvalidOperationException("De geselecteerde stationlocatie is al verwijderd.");
+        using var tr = db.TransactionManager.StartTransaction();
+        foreach (var block in ModelBlocks(db, tr).Where(block => block.Layer == sheet.Layer && BlockName(tr, block) == Symbol))
+        {
+            block.UpgradeOpen();
+            block.Erase();
+        }
+        RefreshOverview(db, tr, sheet.Name);
+        layouts.DeleteLayout(sheet.Name);
         tr.Commit();
     }
 
@@ -291,7 +331,7 @@ internal static class StationLocationSheets
         var db = doc.Database;
         using var tr = db.TransactionManager.StartTransaction();
         var layout = GetLayout(db, tr, sheet.Name);
-        Center(MapViewport(tr, layout), LocationBlock(tr, ModelBlocks(db, tr), sheet).Position);
+        Center(tr, MapViewport(tr, layout), LocationBlock(tr, ModelBlocks(db, tr), sheet).Position);
         WriteFields(db, tr, layout, fields);
         WriteSharedProject(db, tr, fields);
         RefreshOverview(db, tr);
@@ -380,14 +420,17 @@ internal static class StationLocationSheets
     private static bool IsLive(ObjectId id) =>
         !id.IsNull && id.IsValid && !id.IsErased && !id.IsEffectivelyErased;
 
-    private static Viewport MapViewport(Transaction tr, Layout layout)
+    private static Viewport? FindMapViewport(Transaction tr, Layout layout)
     {
-        var viewports = Entities(tr, layout).OfType<Viewport>();
-        var map = layout.LayoutName == OverviewName
-            ? viewports.SingleOrDefault(vp => vp.Number != 1 && vp.Width > 400 && vp.Width < 425 && vp.Height > 240 && vp.Height < 250)
-            : viewports.SingleOrDefault(vp => vp.NonRectClipOn);
-        return map ?? throw new InvalidOperationException($"Layout ‘{layout.LayoutName}’ mist het kaartvenster.");
+        var viewports = Entities(tr, layout).OfType<Viewport>().ToArray();
+        return viewports.FirstOrDefault(vp => vp.Layer == NativeStationGeometry.ViewportLayer)
+            ?? (layout.LayoutName == OverviewName
+                ? viewports.FirstOrDefault(vp => vp.Number != 1 && vp.Width > 400 && vp.Width < 425 && vp.Height > 240 && vp.Height < 250)
+                : viewports.FirstOrDefault(vp => vp.NonRectClipOn));
     }
+
+    private static Viewport MapViewport(Transaction tr, Layout layout) =>
+        FindMapViewport(tr, layout) ?? throw new InvalidOperationException($"Layout ‘{layout.LayoutName}’ mist het kaartvenster.");
 
     private static string BlockName(Transaction tr, BlockReference block)
     {
@@ -414,19 +457,44 @@ internal static class StationLocationSheets
         return id;
     }
 
-    private static void Center(Viewport viewport, Point3d point, int denominator = 250)
+    private static void Center(Transaction tr, Viewport viewport, Point3d point, int denominator = 250)
     {
         if (!viewport.IsWriteEnabled) viewport.UpgradeOpen();
         viewport.Locked = false;
         viewport.ViewDirection = Vector3d.ZAxis;
         viewport.TwistAngle = 0;
         viewport.ViewTarget = point;
-        viewport.ViewCenter = Point2d.Origin;
+        var viewCenter = Point2d.Origin;
+        if (viewport.NonRectClipOn && IsLive(viewport.NonRectClipEntityId) &&
+            tr.GetObject(viewport.NonRectClipEntityId, OpenMode.ForRead) is Polyline { NumberOfVertices: >= 3 } clip)
+        {
+            var centroid = ClipCentroid(clip);
+            viewCenter = new Point2d((viewport.CenterPoint.X - centroid.X) * denominator / 1000.0,
+                (viewport.CenterPoint.Y - centroid.Y) * denominator / 1000.0);
+        }
         viewport.ViewHeight = viewport.Height * denominator / 1000.0;
+        viewport.ViewCenter = viewCenter;
         viewport.Locked = true;
     }
 
-    private static void Isolate(Database db, Transaction tr)
+    private static Point2d ClipCentroid(Polyline clip)
+    {
+        var origin = clip.GetPoint2dAt(0);
+        double area = 0, x = 0, y = 0;
+        for (var i = 0; i < clip.NumberOfVertices; i++)
+        {
+            var a = clip.GetPoint2dAt(i) - origin;
+            var b = clip.GetPoint2dAt((i + 1) % clip.NumberOfVertices) - origin;
+            var cross = a.X * b.Y - b.X * a.Y;
+            area += cross;
+            x += (a.X + b.X) * cross;
+            y += (a.Y + b.Y) * cross;
+        }
+        if (Math.Abs(area) < 1e-10) return origin;
+        return origin + new Vector2d(x / (3 * area), y / (3 * area));
+    }
+
+    private static void Isolate(Database db, Transaction tr, IReadOnlyList<StationSheet> sheets)
     {
         var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
         var locations = layers.Cast<ObjectId>().Where(id =>
@@ -434,7 +502,7 @@ internal static class StationLocationSheets
             var name = ((LayerTableRecord)tr.GetObject(id, OpenMode.ForRead)).Name;
             return name.StartsWith("TB_STATION_", StringComparison.OrdinalIgnoreCase) && name != PhotoLayer;
         }).ToArray();
-        foreach (var sheet in ReadSheets(db, tr))
+        foreach (var sheet in sheets)
         {
             var own = layers[sheet.Layer];
             var viewport = MapViewport(tr, GetLayout(db, tr, sheet.Name));
@@ -444,14 +512,17 @@ internal static class StationLocationSheets
         }
     }
 
-    private static void RefreshOverview(Database db, Transaction tr)
+    private static void RefreshOverview(Database db, Transaction tr, string? excluded = null)
     {
-        var sheets = ReadSheets(db, tr);
-        if (sheets.Count == 0 || !HasOverview(db, tr)) return;
+        if (!HasOverview(db, tr)) return;
+        var sheets = ReadSheets(db, tr, excluded);
+        var overviewLayer = Layer(db, tr, OverviewLayer);
+        ClearOverviewMarkers(db, tr, overviewLayer);
+        if (sheets.Count == 0) return;
         var blocks = ModelBlocks(db, tr);
         var locations = sheets.Select(sheet => (Sheet: sheet, Position: LocationBlock(tr, blocks, sheet).Position)).ToArray();
         var layout = GetLayout(db, tr, OverviewName);
-        var viewport = MapViewport(tr, layout);
+        var viewport = FindMapViewport(tr, layout) ?? NativeStationGeometry.AppendMapViewport(db, tr, layout, true);
         const double margin = 35;
         var left = locations.Min(location => location.Position.X) - margin;
         var right = locations.Max(location => location.Position.X) + margin + 45;
@@ -460,20 +531,13 @@ internal static class StationLocationSheets
         var needed = Math.Max((right - left) / viewport.Width, (top - bottom) / viewport.Height) * 1000;
         var step = needed <= 1000 ? 250 : needed <= 5000 ? 500 : 1000;
         var scale = Math.Max(500, (int)Math.Ceiling(needed / step) * step);
-        Center(viewport, new Point3d((left + right) / 2, (bottom + top) / 2, 0), scale);
-        var overviewLayer = Layer(db, tr, OverviewLayer);
+        Center(tr, viewport, new Point3d((left + right) / 2, (bottom + top) / 2, 0), scale);
         var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
         var visible = sheets.Select(sheet => layers[sheet.Layer]).Append(overviewLayer);
         viewport.ThawLayersInViewport(new ObjectIdCollection(visible.ToArray()).GetEnumerator());
         SetAttributes(db, tr, layout, new Dictionary<string, string> { ["SCHAAL"] = "1:" + scale });
 
         var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
-        foreach (var id in model.Cast<ObjectId>().Where(IsLive).ToArray())
-            if (tr.GetObject(id, OpenMode.ForRead) is Entity entity && entity.LayerId == overviewLayer)
-            {
-                if (!entity.IsWriteEnabled) entity.UpgradeOpen();
-                entity.Erase();
-            }
         foreach (var location in locations)
         {
             var p = location.Position;
@@ -482,12 +546,23 @@ internal static class StationLocationSheets
                 Contents = location.Sheet.Name, LayerId = overviewLayer, Attachment = AttachmentPoint.MiddleLeft };
             model.AppendEntity(label);
             tr.AddNewlyCreatedDBObject(label, true);
-            var circle = new Circle(p, Vector3d.ZAxis, height * 2.3) { LayerId = overviewLayer };
+            var circle = new Circle(p, Vector3d.ZAxis, 20.0) { LayerId = overviewLayer, Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 0, 0) };
             model.AppendEntity(circle);
             tr.AddNewlyCreatedDBObject(circle, true);
         }
         // The overview layer is first created here, so refresh visibility after adding it.
-        Isolate(db, tr);
+        Isolate(db, tr, sheets);
+    }
+
+    private static void ClearOverviewMarkers(Database db, Transaction tr, ObjectId overviewLayer)
+    {
+        var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+        foreach (var id in model.Cast<ObjectId>().Where(IsLive).ToArray())
+            if (tr.GetObject(id, OpenMode.ForRead) is Entity entity && entity.LayerId == overviewLayer)
+            {
+                if (!entity.IsWriteEnabled) entity.UpgradeOpen();
+                entity.Erase();
+            }
     }
 
     private static void WriteMetadata(Database db, Transaction tr, Layout layout, StationSheet sheet)
@@ -505,13 +580,13 @@ internal static class StationLocationSheets
         layout.XData = data;
     }
 
-    private static List<StationSheet> ReadSheets(Database db, Transaction tr)
+    private static List<StationSheet> ReadSheets(Database db, Transaction tr, string? excluded = null)
     {
         var result = new List<StationSheet>();
         var dictionary = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
         foreach (var entry in dictionary)
         {
-            if (!IsLive(entry.Value)) continue;
+            if (entry.Key == excluded || !IsLive(entry.Value)) continue;
             var layout = (Layout)tr.GetObject(entry.Value, OpenMode.ForRead);
             using var data = layout.GetXDataForApplication(Tag);
             var values = data?.AsArray();

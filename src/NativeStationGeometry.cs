@@ -9,25 +9,15 @@ namespace Stationslocaties;
 internal static class NativeStationGeometry
 {
     internal const string TitleName = "TB_STATION_ONDERHOEK";
+    internal const string ViewportLayer = "STATIONLOCATIES_KAARTVENSTER";
     private static readonly Lazy<Template> Data = new(Load);
 
     internal static Viewport AppendSheet(Database db, Transaction tr, Layout layout, bool overview)
     {
         var sheet = overview ? Data.Value.Overview : Data.Value.Detail;
-        var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForWrite);
         ConfigurePlot(db, layout);
-        var viewport = new Viewport
-        {
-            CenterPoint = Point(sheet.View), Width = sheet.View[3], Height = sheet.View[4],
-            ViewDirection = Vector3d.ZAxis
-        };
-        Add(space, tr, viewport);
-        if (sheet.Clip != null)
-        {
-            var clip = Add(space, tr, PolylineOf(sheet.Clip));
-            viewport.NonRectClipEntityId = clip.ObjectId;
-            viewport.NonRectClipOn = true;
-        }
+        var viewport = AppendMapViewport(db, tr, layout, overview);
+        var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForWrite);
 
         foreach (var shape in sheet.Entities) AppendShape(space, tr, shape);
 
@@ -53,6 +43,39 @@ internal static class NativeStationGeometry
             tr.AddNewlyCreatedDBObject(attribute, true);
         }
         return viewport;
+    }
+
+    internal static Viewport AppendMapViewport(Database db, Transaction tr, Layout layout, bool overview)
+    {
+        if (!layout.IsWriteEnabled) layout.UpgradeOpen();
+        layout.Initialize();
+        var sheet = overview ? Data.Value.Overview : Data.Value.Detail;
+        var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForWrite);
+        var viewport = new Viewport
+        {
+            CenterPoint = Point(sheet.View), Width = sheet.View[3], Height = sheet.View[4],
+            ViewDirection = Vector3d.ZAxis, LayerId = ViewportLayerId(db, tr)
+        };
+        Add(space, tr, viewport);
+        if (sheet.Clip != null)
+        {
+            var clip = Add(space, tr, PolylineOf(sheet.Clip));
+            viewport.NonRectClipEntityId = clip.ObjectId;
+            viewport.NonRectClipOn = true;
+        }
+
+        return viewport;
+    }
+
+    private static ObjectId ViewportLayerId(Database db, Transaction tr)
+    {
+        var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        if (layers.Has(ViewportLayer)) return layers[ViewportLayer];
+        if (!layers.IsWriteEnabled) layers.UpgradeOpen();
+        var layer = new LayerTableRecord { Name = ViewportLayer, IsPlottable = false };
+        var id = layers.Add(layer);
+        tr.AddNewlyCreatedDBObject(layer, true);
+        return id;
     }
 
     internal static ObjectId GetSymbol(Database db, Transaction tr, string name) =>
