@@ -145,7 +145,7 @@ internal static class StationLocationSheets
         using var tr = db.TransactionManager.StartTransaction();
         var layout = GetLayout(db, tr, name);
         var values = Title(tr, layout).AttributeCollection.Cast<ObjectId>()
-            .Select(id => (AttributeReference)tr.GetObject(id, OpenMode.ForRead))
+            .Where(IsLive).Select(id => (AttributeReference)tr.GetObject(id, OpenMode.ForRead))
             .ToDictionary(a => a.Tag, a => a.TextString, StringComparer.OrdinalIgnoreCase);
         string Field(string key) => values.GetValueOrDefault(key, "");
         var photo = Entities(tr, layout).OfType<RasterImage>().FirstOrDefault(image => image.Layer == PhotoLayer);
@@ -172,15 +172,20 @@ internal static class StationLocationSheets
                 throw new InvalidOperationException("De modelruimte bevat al losse TRAFO-blokken. Gebruik een projecttekening met alleen de achtergrondkaarten voor deze werkstroom.");
         }
 
-        using var source = new Database(false, true);
-        LoadTemplate(source);
-        using var sourceTr = source.TransactionManager.StartTransaction();
-        var sample = GetLayout(source, sourceTr, TemplateLayout);
-        var overviewSample = newOverview ? GetLayout(source, sourceTr, OverviewName) : null;
+        var step = "ingebouwd sjabloon openen";
+        var detailCreated = false;
         var overviewCreated = false;
-        layouts.CreateLayout(sheet.Name);
+        var committed = false;
         try
         {
+            using var source = new Database(false, true);
+            LoadTemplate(source);
+            using var sourceTr = source.TransactionManager.StartTransaction();
+            var sample = GetLayout(source, sourceTr, TemplateLayout);
+            var overviewSample = newOverview ? GetLayout(source, sourceTr, OverviewName) : null;
+            step = "layouttabbladen aanmaken";
+            layouts.CreateLayout(sheet.Name);
+            detailCreated = true;
             if (newOverview)
             {
                 layouts.CreateLayout(OverviewName);
@@ -188,11 +193,13 @@ internal static class StationLocationSheets
             }
             using var tr = db.TransactionManager.StartTransaction();
             var layout = GetLayout(db, tr, sheet.Name, OpenMode.ForWrite);
-            var viewport = CloneSheet(tr, source, sourceTr, sample, layout);
+            step = "detailblad en kaartvenster opbouwen";
+            var viewport = CloneSheet(db, tr, source, sourceTr, sample, layout);
             if (overviewSample != null)
             {
+                step = "blad Totaal opbouwen";
                 var overview = GetLayout(db, tr, OverviewName, OpenMode.ForWrite);
-                CloneSheet(tr, source, sourceTr, overviewSample, overview);
+                CloneSheet(db, tr, source, sourceTr, overviewSample, overview);
                 overview.CreateExtensionDictionary();
                 var dictionary = (DBDictionary)tr.GetObject(overview.ExtensionDictionary, OpenMode.ForWrite);
                 var marker = new Xrecord();
@@ -207,6 +214,7 @@ internal static class StationLocationSheets
                 ClearRevisions(db, tr, overview);
             }
 
+            step = "trafoblok plaatsen";
             var layerId = Layer(db, tr, sheet.Layer, true);
             var blockId = ImportSymbol(db, tr, source, sourceTr);
             var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
@@ -214,18 +222,35 @@ internal static class StationLocationSheets
             model.AppendEntity(reference);
             tr.AddNewlyCreatedDBObject(reference, true);
             WriteMetadata(db, tr, layout, sheet);
+            step = "detailkaart centreren";
             Center(viewport, point);
+            step = "onderhoek en foto invullen";
             ClearRevisions(db, tr, layout);
             WriteFields(db, tr, layout, fields);
             WriteSharedProject(db, tr, fields);
+            step = "overzicht en laagzichtbaarheid bijwerken";
             RefreshOverview(db, tr);
+            sourceTr.Commit();
             tr.Commit();
+            committed = true;
         }
-        catch
+        catch (Exception ex)
         {
-            if (overviewCreated) layouts.DeleteLayout(OverviewName);
-            layouts.DeleteLayout(sheet.Name);
-            throw;
+            void RemoveFailedLayout(string name)
+            {
+                try
+                {
+                    if (layouts.LayoutExists(name)) layouts.DeleteLayout(name);
+                }
+                catch (Exception cleanupError)
+                {
+                    doc.Editor.WriteMessage($"\nLayout ‘{name}’ opruimen: {cleanupError.Message}");
+                }
+            }
+            if (!committed && overviewCreated) RemoveFailedLayout(OverviewName);
+            if (!committed && detailCreated) RemoveFailedLayout(sheet.Name);
+            doc.Editor.WriteMessage("\n" + ex);
+            throw new InvalidOperationException($"Plaatsen van ‘{sheet.Name}’ mislukt bij {step}. {ex.Message}", ex);
         }
     }
 
@@ -299,7 +324,7 @@ internal static class StationLocationSheets
 
     private static BlockReference[] ModelBlocks(Database db, Transaction tr) =>
         ((BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead))
-        .Cast<ObjectId>().Select(id => tr.GetObject(id, OpenMode.ForRead)).OfType<BlockReference>().ToArray();
+        .Cast<ObjectId>().Where(IsLive).Select(id => tr.GetObject(id, OpenMode.ForRead)).OfType<BlockReference>().ToArray();
 
     private static BlockReference LocationBlock(Transaction tr, BlockReference[] blocks, StationSheet sheet)
     {
@@ -331,11 +356,11 @@ internal static class StationLocationSheets
         }
     }
 
-    private static Viewport CloneSheet(Transaction tr, Database source, Transaction sourceTr, Layout sample, Layout layout)
+    private static Viewport CloneSheet(Database db, Transaction tr, Database source, Transaction sourceTr, Layout sample, Layout layout)
     {
         var sampleViewport = MapViewport(sourceTr, sample);
-        var selected = Entities(sourceTr, sample).Where(entity =>
-            entity is not Viewport || entity.ObjectId == sampleViewport.ObjectId).ToArray();
+        var sourceClip = sampleViewport.NonRectClipOn ? sampleViewport.NonRectClipEntityId : ObjectId.Null;
+        var selected = Entities(sourceTr, sample).Where(entity => entity is not Viewport && entity.ObjectId != sourceClip).ToArray();
         _ = Title(sourceTr, sample);
         using var settings = new PlotSettings(false);
         settings.CopyFrom(sample);
@@ -343,13 +368,41 @@ internal static class StationLocationSheets
         var map = new IdMapping();
         source.WblockCloneObjects(new ObjectIdCollection(selected.Select(entity => entity.ObjectId).ToArray()),
             layout.BlockTableRecordId, map, DuplicateRecordCloning.Ignore, false);
-        var viewport = (Viewport)tr.GetObject(map[sampleViewport.ObjectId].Value, OpenMode.ForWrite);
-        if (sampleViewport.NonRectClipOn)
+        var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForWrite);
+        // AutoCAD owns the viewport and its clip in the destination layout from creation.
+        var viewport = new Viewport
         {
-            viewport.NonRectClipEntityId = map[sampleViewport.NonRectClipEntityId].Value;
+            CenterPoint = sampleViewport.CenterPoint,
+            Width = sampleViewport.Width,
+            Height = sampleViewport.Height,
+            LayerId = Layer(db, tr, sampleViewport.Layer)
+        };
+        space.AppendEntity(viewport);
+        tr.AddNewlyCreatedDBObject(viewport, true);
+        var targetClip = ObjectId.Null;
+        if (!sourceClip.IsNull)
+        {
+            if (!IsLive(sourceClip) || sourceTr.GetObject(sourceClip, OpenMode.ForRead) is not Polyline boundary)
+                throw new InvalidOperationException("Het ingebouwde sjabloon mist een bruikbare kaartuitsnede.");
+            var clip = new Polyline(boundary.NumberOfVertices)
+            {
+                LayerId = Layer(db, tr, boundary.Layer),
+                Normal = boundary.Normal,
+                Elevation = boundary.Elevation
+            };
+            for (var i = 0; i < boundary.NumberOfVertices; i++)
+                clip.AddVertexAt(i, boundary.GetPoint2dAt(i), boundary.GetBulgeAt(i),
+                    boundary.GetStartWidthAt(i), boundary.GetEndWidthAt(i));
+            clip.Closed = boundary.Closed;
+            targetClip = space.AppendEntity(clip);
+            tr.AddNewlyCreatedDBObject(clip, true);
+            viewport.NonRectClipEntityId = targetClip;
             viewport.NonRectClipOn = true;
         }
-        PreserveDrawOrder(sourceTr, sample, tr, layout, selected, map);
+        var cloned = selected.ToDictionary(entity => entity.ObjectId, entity => map[entity.ObjectId].Value);
+        cloned.Add(sampleViewport.ObjectId, viewport.ObjectId);
+        if (!targetClip.IsNull) cloned.Add(sourceClip, targetClip);
+        PreserveDrawOrder(sourceTr, sample, tr, layout, cloned);
         return viewport;
     }
 
@@ -362,26 +415,25 @@ internal static class StationLocationSheets
 
     private static IEnumerable<Entity> Entities(Transaction tr, Layout layout) =>
         ((BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead)).Cast<ObjectId>()
-        .Select(id => tr.GetObject(id, OpenMode.ForRead)).OfType<Entity>();
+        .Where(IsLive).Select(id => tr.GetObject(id, OpenMode.ForRead)).OfType<Entity>();
 
-    private static ObjectId PaperViewport(Layout layout)
-    {
-        var ids = layout.GetViewports();
-        return ids.Count == 0 ? ObjectId.Null : ids[0];
-    }
+    private static bool IsLive(ObjectId id) =>
+        !id.IsNull && id.IsValid && !id.IsErased && !id.IsEffectivelyErased;
 
     private static Viewport MapViewport(Transaction tr, Layout layout)
     {
-        var paper = PaperViewport(layout);
         var viewports = Entities(tr, layout).OfType<Viewport>();
         var map = layout.LayoutName == OverviewName
-            ? viewports.SingleOrDefault(vp => vp.ObjectId != paper && vp.Width > 400 && vp.Width < 425)
+            ? viewports.SingleOrDefault(vp => vp.Number != 1 && vp.Width > 400 && vp.Width < 425 && vp.Height > 240 && vp.Height < 250)
             : viewports.SingleOrDefault(vp => vp.NonRectClipOn);
         return map ?? throw new InvalidOperationException($"Layout ‘{layout.LayoutName}’ mist het kaartvenster.");
     }
 
-    private static string BlockName(Transaction tr, BlockReference block) =>
-        ((BlockTableRecord)tr.GetObject(block.IsDynamicBlock ? block.DynamicBlockTableRecord : block.BlockTableRecord, OpenMode.ForRead)).Name;
+    private static string BlockName(Transaction tr, BlockReference block)
+    {
+        var id = block.IsDynamicBlock ? block.DynamicBlockTableRecord : block.BlockTableRecord;
+        return IsLive(id) ? ((BlockTableRecord)tr.GetObject(id, OpenMode.ForRead)).Name : "";
+    }
 
     private static BlockReference Title(Transaction tr, Layout layout) =>
         Entities(tr, layout).OfType<BlockReference>().SingleOrDefault(block => BlockName(tr, block) == TitleBlock)
@@ -394,7 +446,7 @@ internal static class StationLocationSheets
         var blocks = (BlockTable)sourceTr.GetObject(source.BlockTableId, OpenMode.ForRead);
         if (!blocks.Has("TRAFO")) throw new InvalidOperationException("Het TRAFO-blok ontbreekt in het sjabloon.");
         var original = (BlockTableRecord)sourceTr.GetObject(blocks["TRAFO"], OpenMode.ForWrite);
-        var outline = original.Cast<ObjectId>().Select(id => sourceTr.GetObject(id, OpenMode.ForRead))
+        var outline = original.Cast<ObjectId>().Where(IsLive).Select(id => sourceTr.GetObject(id, OpenMode.ForRead))
             .OfType<Polyline>().SingleOrDefault(line => line.Layer.Equals("MSR~Gepr_Lin35", StringComparison.OrdinalIgnoreCase)
                 && line.NumberOfVertices >= 4)
             ?? throw new InvalidOperationException("De kastcontour ontbreekt in het TRAFO-blok van het sjabloon.");
@@ -485,7 +537,7 @@ internal static class StationLocationSheets
         SetAttributes(db, tr, layout, new Dictionary<string, string> { ["SCHAAL"] = "1:" + scale });
 
         var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
-        foreach (var id in model.Cast<ObjectId>().ToArray())
+        foreach (var id in model.Cast<ObjectId>().Where(IsLive).ToArray())
             if (tr.GetObject(id, OpenMode.ForRead) is Entity entity && entity.LayerId == overviewLayer)
             {
                 if (!entity.IsWriteEnabled) entity.UpgradeOpen();
@@ -528,6 +580,7 @@ internal static class StationLocationSheets
         var dictionary = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
         foreach (var entry in dictionary)
         {
+            if (!IsLive(entry.Value)) continue;
             var layout = (Layout)tr.GetObject(entry.Value, OpenMode.ForRead);
             using var data = layout.GetXDataForApplication(Tag);
             var values = data?.AsArray();
@@ -539,14 +592,14 @@ internal static class StationLocationSheets
     }
 
     private static void PreserveDrawOrder(Transaction sourceTr, Layout sample, Transaction tr, Layout layout,
-        Entity[] selected, IdMapping map)
+        Dictionary<ObjectId, ObjectId> cloned)
     {
         var sourceSpace = (BlockTableRecord)sourceTr.GetObject(sample.BlockTableRecordId, OpenMode.ForRead);
         var targetSpace = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
         var sourceOrder = (DrawOrderTable)sourceTr.GetObject(sourceSpace.DrawOrderTableId, OpenMode.ForRead);
         var targetOrder = (DrawOrderTable)tr.GetObject(targetSpace.DrawOrderTableId, OpenMode.ForWrite);
-        var cloned = selected.Select(entity => entity.ObjectId).ToHashSet();
-        var ids = sourceOrder.GetFullDrawOrder(0).Cast<ObjectId>().Where(cloned.Contains).Select(id => map[id].Value);
+        var ids = sourceOrder.GetFullDrawOrder(0).Cast<ObjectId>()
+            .Where(cloned.ContainsKey).Select(id => cloned[id]).Where(IsLive);
         targetOrder.MoveToTop(new ObjectIdCollection(ids.ToArray()));
     }
 
@@ -584,6 +637,7 @@ internal static class StationLocationSheets
     {
         foreach (ObjectId id in Title(tr, layout).AttributeCollection)
         {
+            if (!IsLive(id)) continue;
             var attribute = (AttributeReference)tr.GetObject(id, OpenMode.ForRead);
             if (!values.TryGetValue(attribute.Tag, out var value)) continue;
             if (!attribute.IsWriteEnabled) attribute.UpgradeOpen();
