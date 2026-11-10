@@ -204,53 +204,26 @@ internal static class StationLocationSheets
         var layouts = LayoutManager.Current;
         if (layouts.LayoutExists(sheet.Name))
             throw new InvalidOperationException($"Layout ‘{sheet.Name}’ bestaat al.");
-        bool newOverview;
+        bool hasOverview;
         using (var check = db.TransactionManager.StartTransaction())
         {
-            newOverview = !HasOverview(db, check);
-            if (newOverview && layouts.LayoutExists(OverviewName))
-                throw new InvalidOperationException("Er bestaat al een layout ‘Totaal’. Hernoem die om een nieuw overzicht te kunnen maken.");
+            hasOverview = HasOverview(db, check);
             if (ModelBlocks(db, check).Any(block => BlockName(check, block).Equals("TRAFO", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("De modelruimte bevat al losse TRAFO-blokken. Gebruik een projecttekening met alleen de achtergrondkaarten voor deze werkstroom.");
         }
 
         var step = "layouttabbladen aanmaken";
         var detailCreated = false;
-        var overviewCreated = false;
         var committed = false;
         try
         {
             step = "layouttabbladen aanmaken";
             layouts.CreateLayout(sheet.Name);
             detailCreated = true;
-            if (newOverview)
-            {
-                layouts.CreateLayout(OverviewName);
-                overviewCreated = true;
-            }
             using var tr = db.TransactionManager.StartTransaction();
             var layout = GetLayout(db, tr, sheet.Name, OpenMode.ForWrite);
             step = "detailblad en kaartvenster opbouwen";
             var viewport = NativeStationGeometry.AppendSheet(db, tr, layout, false);
-            if (newOverview)
-            {
-                step = "blad Totaal opbouwen";
-                var overview = GetLayout(db, tr, OverviewName, OpenMode.ForWrite);
-                NativeStationGeometry.AppendSheet(db, tr, overview, true);
-                overview.CreateExtensionDictionary();
-                var dictionary = (DBDictionary)tr.GetObject(overview.ExtensionDictionary, OpenMode.ForWrite);
-                var marker = new Xrecord();
-                dictionary.SetAt(Tag, marker);
-                tr.AddNewlyCreatedDBObject(marker, true);
-                SetAttributes(db, tr, overview, (fields with { Date = StationFields.Today }).Attributes());
-                SetAttributes(db, tr, overview, new Dictionary<string, string>
-                {
-                    ["OVERIGE1"] = "", ["OVERIGE2"] = "",
-                    ["TEKENINGNUMMER"] = string.IsNullOrWhiteSpace(fields.Area) ? "Trafo-overzicht" : "Overzicht " + fields.Area
-                });
-                ClearRevisions(db, tr, overview);
-            }
-
             step = "trafoblok plaatsen";
             var layerId = Layer(db, tr, sheet.Layer, true);
             var blockId = NativeStationGeometry.GetSymbol(db, tr, Symbol);
@@ -285,7 +258,6 @@ internal static class StationLocationSheets
                     doc.Editor.WriteMessage($"\nLayout ‘{name}’ opruimen: {cleanupError.Message}");
                 }
             }
-            if (!committed && overviewCreated) RemoveFailedLayout(OverviewName);
             if (!committed && detailCreated) RemoveFailedLayout(sheet.Name);
             doc.Editor.WriteMessage("\n" + ex);
             throw new InvalidOperationException($"Plaatsen van ‘{sheet.Name}’ mislukt bij {step}. {ex.Message}", ex);
@@ -295,12 +267,57 @@ internal static class StationLocationSheets
         try
         {
             EnableCreatedViewport(doc, sheet.Name);
-            EnableCreatedViewport(doc, OverviewName);
+            if (hasOverview) EnableCreatedViewport(doc, OverviewName);
         }
         finally
         {
             layouts.CurrentLayout = previousLayout;
         }
+    }
+
+    internal static void MakeOverview(Document doc)
+    {
+        var db = doc.Database;
+        if (HasOverview(db))
+        {
+            OpenSheet(doc, OverviewName);
+            return;
+        }
+        if (List(db).Count == 0)
+            throw new InvalidOperationException("Plaats minstens één stationlocatie om Totaal te maken.");
+        var layouts = LayoutManager.Current;
+        if (layouts.LayoutExists(OverviewName))
+            throw new InvalidOperationException("Er bestaat al een ander blad met de naam Totaal. Hernoem dat blad eerst.");
+
+        var fields = ProjectFields(db);
+        layouts.CreateLayout(OverviewName);
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var overview = GetLayout(db, tr, OverviewName, OpenMode.ForWrite);
+            NativeStationGeometry.AppendSheet(db, tr, overview, true);
+            overview.CreateExtensionDictionary();
+            var dictionary = (DBDictionary)tr.GetObject(overview.ExtensionDictionary, OpenMode.ForWrite);
+            var marker = new Xrecord();
+            dictionary.SetAt(Tag, marker);
+            tr.AddNewlyCreatedDBObject(marker, true);
+            SetAttributes(db, tr, overview, (fields with { Date = StationFields.Today }).Attributes());
+            SetAttributes(db, tr, overview, new Dictionary<string, string>
+            {
+                ["OVERIGE1"] = "", ["OVERIGE2"] = "",
+                ["TEKENINGNUMMER"] = string.IsNullOrWhiteSpace(fields.Area) ? "Trafo-overzicht" : "Overzicht " + fields.Area
+            });
+            ClearRevisions(db, tr, overview);
+            RefreshOverview(db, tr);
+            tr.Commit();
+        }
+        catch
+        {
+            try { layouts.DeleteLayout(OverviewName); }
+            catch (Exception cleanupError) { doc.Editor.WriteMessage("\nTotaal opruimen: " + cleanupError.Message); }
+            throw;
+        }
+        OpenSheet(doc, OverviewName, refreshOverview: false);
     }
 
     private static void EnableCreatedViewport(Document doc, string layoutName)
@@ -440,7 +457,8 @@ internal static class StationLocationSheets
 
     internal static IReadOnlyList<SheetRow> ReadSheetRows(Database db, IReadOnlyList<StationSheet> sheets)
     {
-        var rows = new List<SheetRow> { new(OverviewName, true, ProjectFields(db)) };
+        var rows = new List<SheetRow>();
+        if (HasOverview(db)) rows.Add(new(OverviewName, true, ProjectFields(db)));
         rows.AddRange(sheets.Select(sheet => new SheetRow(sheet.Name, false, ReadFields(db, sheet))));
         return rows;
     }
@@ -466,15 +484,17 @@ internal static class StationLocationSheets
     internal static void UpdateProject(Database db, StationFields fields)
     {
         using var tr = db.TransactionManager.StartTransaction();
-        if (!HasOverview(db, tr)) throw new InvalidOperationException("Plaats eerst een locatie om het project te starten.");
         WriteSharedProject(db, tr, fields);
-        var overview = GetLayout(db, tr, OverviewName);
-        SetAttributes(db, tr, overview, new Dictionary<string, string>
+        if (HasOverview(db, tr))
         {
-            ["TDD"] = fields.Date, ["TEKENINGNUMMER"] = fields.DrawingNumber,
-            ["OVERIGE2"] = fields.Address, ["OVERIGE1"] = fields.Notes
-        });
-        RefreshOverview(db, tr);
+            var overview = GetLayout(db, tr, OverviewName);
+            SetAttributes(db, tr, overview, new Dictionary<string, string>
+            {
+                ["TDD"] = fields.Date, ["TEKENINGNUMMER"] = fields.DrawingNumber,
+                ["OVERIGE2"] = fields.Address, ["OVERIGE1"] = fields.Notes
+            });
+            RefreshOverview(db, tr);
+        }
         tr.Commit();
     }
 
@@ -483,6 +503,12 @@ internal static class StationLocationSheets
         var shared = fields.SharedAttributes();
         foreach (var sheet in ReadSheets(db, tr)) SetAttributes(db, tr, GetLayout(db, tr, sheet.Name), shared);
         if (HasOverview(db, tr)) SetAttributes(db, tr, GetLayout(db, tr, OverviewName), shared);
+    }
+
+    internal static bool HasOverview(Database db)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        return HasOverview(db, tr);
     }
 
     private static bool HasOverview(Database db, Transaction tr)
@@ -614,8 +640,18 @@ internal static class StationLocationSheets
 
     private static void RefreshOverview(Database db, Transaction tr, string? excluded = null)
     {
-        if (!HasOverview(db, tr)) return;
         var sheets = ReadSheets(db, tr, excluded);
+        if (!HasOverview(db, tr))
+        {
+            if (sheets.Count == 0) return;
+            var stationBlocks = ModelBlocks(db, tr);
+            var modelSpace = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+            var order = (DrawOrderTable)tr.GetObject(modelSpace.DrawOrderTableId, OpenMode.ForWrite);
+            order.MoveToTop(new ObjectIdCollection(sheets.Select(sheet => LocationBlock(tr, stationBlocks, sheet).ObjectId).ToArray()));
+            Isolate(db, tr, sheets);
+            return;
+        }
+
         var overviewLayer = Layer(db, tr, OverviewLayer);
         ClearOverviewMarkers(db, tr, overviewLayer);
         if (sheets.Count == 0) return;

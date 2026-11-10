@@ -9,7 +9,7 @@ using Autodesk.AutoCAD.PlottingServices;
 namespace Stationslocaties;
 
 internal sealed record StationPlotOptions(string[] Layouts, string Device, string Media, string Style,
-    bool Landscape, bool Fit, string Folder);
+    bool Landscape, bool Fit, bool Lineweights, string Folder);
 
 internal sealed class StationPlotDialog : Form
 {
@@ -24,6 +24,7 @@ internal sealed class StationPlotDialog : Form
     private readonly ComboBox style = Choice();
     private readonly ComboBox rotation = Choice();
     private readonly ComboBox scale = Choice();
+    private readonly CheckBox lineweights = new() { Text = "Lijndiktes plotten", AutoSize = true, Anchor = AnchorStyles.Left };
     private readonly TextBox folder = new() { Dock = DockStyle.Fill };
     private readonly Button plot = new() { Text = "PDF’s maken", AutoSize = true };
     internal StationPlotOptions? Options { get; private set; }
@@ -70,8 +71,9 @@ internal sealed class StationPlotDialog : Form
         style.Items.Add("Geen plotstijltabel");
         foreach (var name in validator.GetPlotStyleSheetList().OfType<string>())
             if (name.EndsWith(db.PlotStyleMode ? ".ctb" : ".stb", StringComparison.OrdinalIgnoreCase)) style.Items.Add(name);
-        var monochrome = style.Items.IndexOf("monochrome.ctb");
-        style.SelectedIndex = monochrome >= 0 ? monochrome : 0;
+        style.SelectedIndex = 0;
+        style.Enabled = false;
+        lineweights.CheckedChanged += (_, _) => style.Enabled = lineweights.Checked;
         rotation.Items.AddRange(new[] { "Liggend", "Staand" });
         rotation.SelectedIndex = 0;
         scale.Items.AddRange(new[] { "1:1 op papier", "Passend op papier" });
@@ -81,6 +83,7 @@ internal sealed class StationPlotDialog : Form
         Row("Plotstijl", style);
         Row("Afdrukstand", rotation);
         Row("Plotschaal", scale);
+        Row("Lijndiktes", lineweights);
 
         folder.Text = !string.IsNullOrWhiteSpace(db.Filename) && Path.IsPathFullyQualified(db.Filename)
             ? Path.GetDirectoryName(db.Filename) ?? "" : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
@@ -144,8 +147,8 @@ internal sealed class StationPlotDialog : Form
             return;
         }
         Options = new(chosen, plotter, paper.Canonical,
-            style.SelectedIndex > 0 ? (string)style.SelectedItem! : "",
-            rotation.SelectedIndex == 0, scale.SelectedIndex == 1, output);
+            lineweights.Checked && style.SelectedIndex > 0 ? (string)style.SelectedItem! : "",
+            rotation.SelectedIndex == 0, scale.SelectedIndex == 1, lineweights.Checked, output);
         DialogResult = DialogResult.OK;
     }
 }
@@ -236,8 +239,9 @@ internal static class StationPlot
         validator.SetUseStandardScale(settings, true);
         validator.SetStdScaleType(settings, options.Fit ? StdScaleType.ScaleToFit : StdScaleType.StdScale1To1);
         if (options.Fit) validator.SetPlotCentered(settings, true);
-        settings.PlotPlotStyles = options.Style.Length > 0;
-        if (options.Style.Length > 0) validator.SetCurrentStyleSheet(settings, options.Style);
+        if (options.Lineweights && options.Style.Length > 0) validator.SetCurrentStyleSheet(settings, options.Style);
+        settings.PlotPlotStyles = options.Lineweights && options.Style.Length > 0;
+        settings.PrintLineweights = options.Lineweights;
 
     }
 

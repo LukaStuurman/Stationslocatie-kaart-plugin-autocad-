@@ -116,6 +116,8 @@ internal static class NativeStationGeometry
         {
             // A host without the standard PDF plotter can still create and edit the layout.
         }
+        layout.PlotPlotStyles = false;
+        layout.PrintLineweights = false;
     }
 
     private static T Add<T>(BlockTableRecord owner, Transaction tr, T entity) where T : Entity

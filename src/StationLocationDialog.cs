@@ -27,7 +27,8 @@ public sealed class Plugin
             try
             {
                 var sheets = StationLocationSheets.List(doc.Database);
-                using var dialog = new StationLocationDialog(sheets, selected);
+                var hasOverview = StationLocationSheets.HasOverview(doc.Database);
+                using var dialog = new StationLocationDialog(sheets, selected, hasOverview);
                 if (AcApp.ShowModalDialog(dialog) != DialogResult.OK) return;
                 selected = dialog.Selected;
                 switch (dialog.Action)
@@ -60,7 +61,7 @@ public sealed class Plugin
                             StationLocationSheets.Create(doc, sheet, fields, new Point3d(point.X, point.Y, 0), rotation);
                             selected = sheet;
                             editor.Regen();
-                            editor.WriteMessage($"\nA3-layout ‘{sheet.Name}’ aangemaakt. ‘Totaal’ is bijgewerkt.");
+                            editor.WriteMessage($"\nA3-layout ‘{sheet.Name}’ aangemaakt.");
                         }
                         break;
                     case StationLocationAction.Edit when selected != null:
@@ -95,7 +96,7 @@ public sealed class Plugin
                             }
                         break;
                     case StationLocationAction.Project:
-                        using (var input = new StationFieldsDialog(StationLocationSheets.ProjectFields(doc.Database), project: true))
+                        using (var input = new StationFieldsDialog(StationLocationSheets.ProjectFields(doc.Database), project: true, showOverviewFields: hasOverview))
                             if (AcApp.ShowModalDialog(input) == DialogResult.OK)
                                 StationLocationSheets.UpdateProject(doc.Database, input.Fields);
                         break;
@@ -110,7 +111,7 @@ public sealed class Plugin
                         break;
                     case StationLocationAction.Plot:
                         var names = sheets.Select(sheet => sheet.Name).ToList();
-                        if (LayoutManager.Current.LayoutExists(StationLocationSheets.OverviewName))
+                        if (hasOverview)
                             names.Insert(0, StationLocationSheets.OverviewName);
                         using (var input = new StationPlotDialog(doc.Database, names))
                             if (AcApp.ShowModalDialog(input) == DialogResult.OK && input.Options is { } options)
@@ -124,7 +125,7 @@ public sealed class Plugin
                         doc.Editor.Regen();
                         return;
                     case StationLocationAction.Overview:
-                        StationLocationSheets.OpenSheet(doc, StationLocationSheets.OverviewName);
+                        StationLocationSheets.MakeOverview(doc);
                         doc.Editor.Regen();
                         return;
                 }
@@ -146,7 +147,7 @@ internal sealed class StationLocationDialog : Form
     internal StationSheet? Selected => locations.SelectedItems.Count == 1 ? (StationSheet?)locations.SelectedItems[0].Tag : null;
     internal StationLocationAction Action { get; private set; }
 
-    internal StationLocationDialog(List<StationSheet> sheets, StationSheet? previous)
+    internal StationLocationDialog(List<StationSheet> sheets, StationSheet? previous, bool hasOverview)
     {
         Text = "Techbase | Stationlocaties";
         StartPosition = FormStartPosition.CenterParent;
@@ -201,8 +202,8 @@ internal sealed class StationLocationDialog : Form
         var delete = Add("Locatie verwijderen", StationLocationAction.Delete, false);
         Add("Alle bladen bewerken", StationLocationAction.EditAll, sheets.Count > 0);
         Add("Projectgegevens", StationLocationAction.Project, sheets.Count > 0);
-        Add("Open Totaal", StationLocationAction.Overview, sheets.Count > 0);
-        Add("Bladen plotten", StationLocationAction.Plot, sheets.Count > 0);
+        Add(hasOverview ? "Totaal bijwerken" : "Totaal maken", StationLocationAction.Overview, sheets.Count > 0 || hasOverview);
+        Add("Bladen plotten", StationLocationAction.Plot, sheets.Count > 0 || hasOverview);
         var close = new Button { Text = "Sluiten", AutoSize = true, DialogResult = DialogResult.Cancel };
         actions.Controls.Add(close);
         CancelButton = close;
@@ -243,11 +244,11 @@ internal sealed class StationFieldsDialog : Form
 
     internal StationFieldsDialog(StationFields initial, bool adding = false, bool project = false,
         int number = 1, bool preferred = true, string photoFolder = "", HashSet<int>? existingPreferred = null,
-        Func<Point3d>? locate = null)
+        Func<Point3d>? locate = null, bool showOverviewFields = true)
     {
         original = initial;
         this.photoFolder = photoFolder;
-        Text = adding ? "Locatie plaatsen" : project ? "Projectgegevens en blad Totaal" : "Bladgegevens en locatiefoto";
+        Text = adding ? "Locatie plaatsen" : project ? (showOverviewFields ? "Projectgegevens en blad Totaal" : "Projectgegevens") : "Bladgegevens en locatiefoto";
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
         ClientSize = new Size(850, project ? 645 : 725);
@@ -276,35 +277,38 @@ internal sealed class StationFieldsDialog : Form
         TextRow("Intern projectnummer", initial.ProjectNumber);
         TextRow("Projectnummer opdrachtgever", initial.ClientNumber);
         TextRow("Initialen tekenaar", initial.Drafter);
-        Heading(project ? "Gegevens voor Totaal" : "Gegevens voor dit blad");
-        var date = TextRow("Datum", initial.Date, hasAction: true);
-        var today = new Button { Text = "Vandaag", AutoSize = true, Anchor = AnchorStyles.Left };
-        today.Click += (_, _) => date.Text = StationFields.Today;
-        grid.Controls.Add(today, 2, row - 1);
-        var address = TextRow("Adres / locatie", initial.Address, hasAction: locate != null);
-        var addressRow = row - 1;
-        if (adding) Row("RD-coördinaten", lookupAddress, span: 2);
-        if (locate != null)
+        if (!project || showOverviewFields)
         {
-            var search = new Button { Text = "PDOK", AutoSize = true, Anchor = AnchorStyles.Left };
-            search.Click += (_, _) =>
+            Heading(project ? "Gegevens voor Totaal" : "Gegevens voor dit blad");
+            var date = TextRow("Datum", initial.Date, hasAction: true);
+            var today = new Button { Text = "Vandaag", AutoSize = true, Anchor = AnchorStyles.Left };
+            today.Click += (_, _) => date.Text = StationFields.Today;
+            grid.Controls.Add(today, 2, row - 1);
+            var address = TextRow("Adres / locatie", initial.Address, hasAction: locate != null);
+            var addressRow = row - 1;
+            if (adding) Row("RD-coördinaten", lookupAddress, span: 2);
+            if (locate != null)
             {
-                try
+                var search = new Button { Text = "PDOK", AutoSize = true, Anchor = AnchorStyles.Left };
+                search.Click += (_, _) =>
                 {
-                    var result = PdokAddress.Lookup(locate());
-                    if (result.Address != null) address.Text = result.Address;
-                    else MessageBox.Show(this, result.Message, Text);
-                }
-                catch (System.Exception ex)
-                {
-                    MessageBox.Show(this, ex.Message, Text);
-                }
-            };
-            grid.Controls.Add(search, 2, addressRow);
+                    try
+                    {
+                        var result = PdokAddress.Lookup(locate());
+                        if (result.Address != null) address.Text = result.Address;
+                        else MessageBox.Show(this, result.Message, Text);
+                    }
+                    catch (System.Exception ex)
+                    {
+                        MessageBox.Show(this, ex.Message, Text);
+                    }
+                };
+                grid.Controls.Add(search, 2, addressRow);
+            }
+            TextRow("Opmerking", initial.Notes);
+            TextRow("Tekeningnummer", initial.DrawingNumber);
+            if (!project) FileRow("Locatiefoto", initial.Photo, "Afbeeldingen (*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff)|*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff");
         }
-        TextRow("Opmerking", initial.Notes);
-        TextRow("Tekeningnummer", initial.DrawingNumber);
-        if (!project) FileRow("Locatiefoto", initial.Photo, "Afbeeldingen (*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff)|*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff");
         var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 56, FlowDirection = System.Windows.Forms.FlowDirection.RightToLeft, Padding = new Padding(15, 10, 15, 0) };
         var cancel = new Button { Text = "Annuleren", AutoSize = true, DialogResult = DialogResult.Cancel };
         var ok = new Button { Text = adding ? "Plaatsen op kaart" : "Opslaan", AutoSize = true };

@@ -10,9 +10,10 @@ Download `Stationslocaties-AutoCAD.zip` uit deze repo, pak het bestand uit, slui
 
 1. Open een project-DWG met de gewenste achtergrond in modelruimte en werk in meters.
 2. Kies **Locatie plaatsen**. De plug-in bevat een leeg A3-sjabloon, de onderhoek, het fotovak en het trafoblok.
-3. Vul de projectgegevens in, kies het trafonummer en VL of AL en prik het midden en de draairichting. De plug-in maakt een detailblad op 1:250 en werkt Totaal bij.
+3. Vul de projectgegevens in, kies het trafonummer en VL of AL en prik het midden en de draairichting. De plug-in maakt een detailblad op 1:250.
 4. Laat **Adres / locatie** leeg om met PDOK het dichtstbijzijnde BAG-adres binnen 1 km in te vullen. De optie gebruikt het aangeklikte punt in RD New (EPSG:28992) en kan per plaatsing worden uitgezet. Een handmatig opgegeven adres krijgt voorrang. Bij een onbereikbare dienst kun je de locatie gewoon plaatsen.
-5. Voeg de alternatieve locaties toe. Elk detailblad toont de eigen trafolocatie. Totaal toont alle locaties.
+5. Voeg de alternatieve locaties toe. Elk detailblad toont de eigen trafolocatie.
+6. Kies **Totaal maken** zodra je het overzicht wilt. Daarna kun je het blad openen via **Totaal bijwerken**.
 
 ## Bestaande bladen bijwerken
 
@@ -33,7 +34,7 @@ Kies een locatie en open **Geselecteerd blad**. Wijzig het trafonummer of locati
 
 Gebruik **Bladeren** of **Plakken** bij de locatiefoto. De foto vult het vaste vak met een centrale uitsnede. Een geplakte afbeelding wordt bij het opslaan als PNG naast de DWG bewaard in `Stationlocaties-fotos`. Bij een onopgeslagen DWG of een map zonder schrijfrechten gebruikt de plug-in een lokale fotomap.
 
-Kies **Bladen plotten**, vink de gewenste layouts aan en stel de PDF-plotter, het papierformaat, de plotstijl, de afdrukstand, de schaal en de uitvoermap één keer in. Elk blad krijgt een afzonderlijke PDF met de layoutnaam. Bij een bestaande bestandsnaam krijgt de nieuwe PDF een volgnummer.
+Kies **Bladen plotten**, vink de gewenste layouts aan en stel de PDF-plotter, het papierformaat, de plotstijl, de afdrukstand, de schaal en de uitvoermap één keer in. Elk blad krijgt een afzonderlijke PDF met de layoutnaam. Bij een bestaande bestandsnaam krijgt de nieuwe PDF een volgnummer. Lijndiktes staan standaard uit. Vink **Lijndiktes plotten** aan om ook een plotstijltabel te kunnen kiezen.
 
 ## Bouwen
 
