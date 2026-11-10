@@ -58,6 +58,16 @@ internal static class StationLocationSheets
         return ReadSheets(db, tr).OrderBy(sheet => sheet.Number).ThenBy(sheet => sheet.Alternative).ToList();
     }
 
+    internal static HashSet<string> SheetsWithPhoto(Database db, IReadOnlyList<StationSheet> sheets)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        return sheets.Where(sheet =>
+        {
+            var layout = GetLayout(db, tr, sheet.Name);
+            return PhotoImage(tr, layout) is { ShowImage: true } photo && IsLive(photo.ImageDefId);
+        }).Select(sheet => sheet.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
     internal static StationSheet Next(Database db, int number, bool preferred)
     {
         var sameStation = List(db).Where(sheet => sheet.Number == number).ToArray();
@@ -182,7 +192,7 @@ internal static class StationLocationSheets
             .Where(IsLive).Select(id => (AttributeReference)tr.GetObject(id, OpenMode.ForRead))
             .ToDictionary(a => a.Tag, a => a.TextString, StringComparer.OrdinalIgnoreCase);
         string Field(string key) => values.GetValueOrDefault(key, "");
-        var photo = Entities(tr, layout).OfType<RasterImage>().FirstOrDefault(image => image.Layer == PhotoLayer);
+        var photo = PhotoImage(tr, layout);
         var path = photo == null ? "" : PhotoPath(tr, photo, out _);
         return new(Field("PROJECTNAAM"), Field("DEELGEBIED"), Field("GEMEENTE"), Field("PROJECTNR.CIRCET"),
             Field("PROJECTNR.OPDR."), Field("GET"), Field("TDD"), Field("OVERIGE2"), Field("OVERIGE1"), Field("TEKENINGNUMMER"), path);
@@ -246,6 +256,7 @@ internal static class StationLocationSheets
             SetPhoto(db, tr, layout, fields.Photo);
             step = "overzicht en laagzichtbaarheid bijwerken";
             RefreshOverview(db, tr);
+            AddLocationVisibility(db, tr, sheet, viewport, layerId);
             tr.Commit();
             committed = true;
         }
@@ -502,7 +513,6 @@ internal static class StationLocationSheets
                 ["TDD"] = fields.Date, ["TEKENINGNUMMER"] = fields.DrawingNumber,
                 ["OVERIGE2"] = fields.Address, ["OVERIGE1"] = fields.Notes
             });
-            RefreshOverview(db, tr);
         }
         tr.Commit();
     }
@@ -531,11 +541,15 @@ internal static class StationLocationSheets
 
     private static BlockReference[] ModelBlocks(Database db, Transaction tr) =>
         ((BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead))
-        .Cast<ObjectId>().Where(IsLive).Select(id => tr.GetObject(id, OpenMode.ForRead)).OfType<BlockReference>().ToArray();
+        .Cast<ObjectId>().Where(id => IsLive(id) && id.ObjectClass.DxfName == "INSERT")
+            .Select(id => tr.GetObject(id, OpenMode.ForRead)).OfType<BlockReference>().ToArray();
 
-    private static BlockReference LocationBlock(Transaction tr, BlockReference[] blocks, StationSheet sheet)
+    private static BlockReference LocationBlock(Transaction tr, BlockReference[] blocks, StationSheet sheet) =>
+        RequireLocationBlock(blocks.Where(block => block.Layer == sheet.Layer && BlockName(tr, block) == Symbol), sheet);
+
+    private static BlockReference RequireLocationBlock(IEnumerable<BlockReference> blocks, StationSheet sheet)
     {
-        var matches = blocks.Where(block => block.Layer == sheet.Layer && BlockName(tr, block) == Symbol).Take(2).ToArray();
+        var matches = blocks.Take(2).ToArray();
         if (matches.Length != 1)
             throw new InvalidOperationException($"Verwacht één trafo-blok op laag ‘{sheet.Layer}’. Gevonden: {matches.Length}.");
         return matches[0];
@@ -629,12 +643,19 @@ internal static class StationLocationSheets
         return origin + new Vector2d(x / (3 * area), y / (3 * area));
     }
 
-    private static void Isolate(Database db, Transaction tr, IReadOnlyList<StationSheet> sheets)
+    private static void AddLocationVisibility(Database db, Transaction tr, StationSheet added, Viewport viewport, ObjectId layer)
     {
         var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-        var locations = StationLayers(tr, layers);
-        foreach (var sheet in sheets)
-            IsolateViewport(MapViewport(tr, GetLayout(db, tr, sheet.Name)), layers[sheet.Layer], locations);
+        IsolateViewport(viewport, layer, StationLayers(tr, layers));
+        var additions = new[] { layer, layers[OverviewLayer] };
+        foreach (var sheet in ReadSheets(db, tr, added.Name))
+        {
+            var existing = MapViewport(tr, GetLayout(db, tr, sheet.Name));
+            var toFreeze = additions.Where(id => !existing.IsLayerFrozenInViewport(id)).ToArray();
+            if (toFreeze.Length == 0) continue;
+            if (!existing.IsWriteEnabled) existing.UpgradeOpen();
+            existing.FreezeLayersInViewport(toFreeze.GetEnumerator());
+        }
     }
 
     private static ObjectId[] StationLayers(Transaction tr, LayerTable layers) =>
@@ -646,10 +667,12 @@ internal static class StationLocationSheets
 
     private static void IsolateViewport(Viewport viewport, ObjectId own, ObjectId[] locations)
     {
-        if (!viewport.IsWriteEnabled) viewport.UpgradeOpen();
-        if (viewport.IsLayerFrozenInViewport(own))
-            viewport.ThawLayersInViewport(new[] { own }.GetEnumerator());
+        var thawOwn = viewport.IsLayerFrozenInViewport(own);
         var toFreeze = locations.Where(id => id != own && !viewport.IsLayerFrozenInViewport(id)).ToArray();
+        if (!thawOwn && toFreeze.Length == 0) return;
+        if (!viewport.IsWriteEnabled) viewport.UpgradeOpen();
+        if (thawOwn)
+            viewport.ThawLayersInViewport(new[] { own }.GetEnumerator());
         if (toFreeze.Length > 0)
             viewport.FreezeLayersInViewport(toFreeze.GetEnumerator());
     }
@@ -658,12 +681,20 @@ internal static class StationLocationSheets
     {
         var sheets = ReadSheets(db, tr, excluded);
         var overviewLayer = Layer(db, tr, OverviewLayer);
-        ClearOverviewMarkers(db, tr, overviewLayer);
-        if (sheets.Count == 0) return;
-        var blocks = ModelBlocks(db, tr);
-        var locations = sheets.Select(sheet => (Sheet: sheet, Block: LocationBlock(tr, blocks, sheet))).ToArray();
+        var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+        var markers = new List<Entity>();
+        var stationBlocks = new List<BlockReference>();
+        foreach (var id in model)
+        {
+            if (!IsLive(id) || id.ObjectClass.DxfName is not ("INSERT" or "CIRCLE" or "MTEXT")) continue;
+            if (tr.GetObject(id, OpenMode.ForRead) is not Entity entity) continue;
+            if (entity.LayerId == overviewLayer) markers.Add(entity);
+            else if (entity is BlockReference block && BlockName(tr, block) == Symbol) stationBlocks.Add(block);
+        }
+        var blocks = stationBlocks.ToLookup(block => block.Layer, StringComparer.OrdinalIgnoreCase);
+        var locations = sheets.Select(sheet => (Sheet: sheet, Block: RequireLocationBlock(blocks[sheet.Layer], sheet))).ToArray();
         var scale = 500;
-        if (HasOverview(db, tr))
+        if (locations.Length > 0 && HasOverview(db, tr))
         {
             var layout = GetLayout(db, tr, OverviewName);
             var viewport = FindMapViewport(tr, layout) ?? NativeStationGeometry.AppendMapViewport(db, tr, layout, true);
@@ -677,43 +708,66 @@ internal static class StationLocationSheets
             scale = Math.Max(500, (int)Math.Ceiling(needed / step) * step);
             Center(tr, viewport, new Point3d((left + right) / 2, (bottom + top) / 2, 0), scale);
             var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-            var visible = sheets.Select(sheet => layers[sheet.Layer]).Append(overviewLayer);
-            viewport.ThawLayersInViewport(visible.ToArray().GetEnumerator());
+            var frozen = sheets.Select(sheet => layers[sheet.Layer]).Append(overviewLayer)
+                .Where(viewport.IsLayerFrozenInViewport).ToArray();
+            if (frozen.Length > 0) viewport.ThawLayersInViewport(frozen.GetEnumerator());
             SetAttributes(db, tr, layout, new Dictionary<string, string> { ["SCHAAL"] = "1:" + scale });
         }
 
-        var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        var circles = markers.OfType<Circle>().ToLookup(circle => circle.Center);
+        var labels = markers.OfType<MText>().ToLookup(label => label.Contents, StringComparer.Ordinal);
+        var retained = new HashSet<ObjectId>();
         var foreground = new ObjectIdCollection();
+        using var red = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 0, 0);
+        bool HasRedColor(Circle item)
+        {
+            using var color = item.Color;
+            return color.CompareTo(red) == 0;
+        }
+
+        var height = scale * 0.003;
         foreach (var location in locations)
         {
+            var point = location.Block.Position;
+            var labelPoint = point + new Vector3d(height * 3, height, 0);
+            var label = labels[location.Sheet.Name].FirstOrDefault(item =>
+                item.Location == labelPoint && item.TextHeight == height && item.Attachment == AttachmentPoint.MiddleLeft);
+            var circle = circles[point].FirstOrDefault(item => !retained.Contains(item.ObjectId) &&
+                item.Radius == 20.0 && item.Normal == Vector3d.ZAxis && HasRedColor(item));
+
+            if (label != null) retained.Add(label.ObjectId);
+            if (circle != null) retained.Add(circle.ObjectId);
+            if (label != null && circle != null) continue;
+
+            if (!model.IsWriteEnabled) model.UpgradeOpen();
+            if (label == null)
+            {
+                label = new MText { Location = labelPoint, TextHeight = height, Contents = location.Sheet.Name,
+                    LayerId = overviewLayer, Attachment = AttachmentPoint.MiddleLeft };
+                model.AppendEntity(label);
+                tr.AddNewlyCreatedDBObject(label, true);
+            }
+            if (circle == null)
+            {
+                circle = new Circle(point, Vector3d.ZAxis, 20.0) { LayerId = overviewLayer, Color = red };
+                model.AppendEntity(circle);
+                tr.AddNewlyCreatedDBObject(circle, true);
+            }
             foreground.Add(location.Block.ObjectId);
-            var p = location.Block.Position;
-            var height = scale * 0.003;
-            var label = new MText { Location = p + new Vector3d(height * 3, height, 0), TextHeight = height,
-                Contents = location.Sheet.Name, LayerId = overviewLayer, Attachment = AttachmentPoint.MiddleLeft };
-            model.AppendEntity(label);
-            tr.AddNewlyCreatedDBObject(label, true);
-            var circle = new Circle(p, Vector3d.ZAxis, 20.0) { LayerId = overviewLayer, Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 0, 0) };
-            model.AppendEntity(circle);
-            tr.AddNewlyCreatedDBObject(circle, true);
             foreground.Add(circle.ObjectId);
             foreground.Add(label.ObjectId);
         }
-        var drawOrder = (DrawOrderTable)tr.GetObject(model.DrawOrderTableId, OpenMode.ForWrite);
-        drawOrder.MoveToTop(foreground);
-        // Keep model-space markers out of the detail viewports.
-        Isolate(db, tr, sheets);
-    }
-
-    private static void ClearOverviewMarkers(Database db, Transaction tr, ObjectId overviewLayer)
-    {
-        var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
-        foreach (var id in model.Cast<ObjectId>().Where(IsLive).ToArray())
-            if (tr.GetObject(id, OpenMode.ForRead) is Entity entity && entity.LayerId == overviewLayer)
-            {
-                if (!entity.IsWriteEnabled) entity.UpgradeOpen();
-                entity.Erase();
-            }
+        foreach (var marker in markers)
+        {
+            if (retained.Contains(marker.ObjectId)) continue;
+            if (!marker.IsWriteEnabled) marker.UpgradeOpen();
+            marker.Erase();
+        }
+        if (foreground.Count > 0)
+        {
+            var drawOrder = (DrawOrderTable)tr.GetObject(model.DrawOrderTableId, OpenMode.ForWrite);
+            drawOrder.MoveToTop(foreground);
+        }
     }
 
     private static void WriteMetadata(Database db, Transaction tr, Layout layout, StationSheet sheet)
@@ -809,9 +863,15 @@ internal static class StationLocationSheets
         return PhotoFrame.Default;
     }
 
+    private static RasterImage? PhotoImage(Transaction tr, Layout layout) =>
+        ((BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead)).Cast<ObjectId>()
+            .Where(id => IsLive(id) && id.ObjectClass.DxfName == "IMAGE")
+            .Select(id => (RasterImage)tr.GetObject(id, OpenMode.ForRead))
+            .FirstOrDefault(image => image.Layer == PhotoLayer);
+
     private static void SetPhoto(Database db, Transaction tr, Layout layout, string path)
     {
-        var oldPhoto = Entities(tr, layout).OfType<RasterImage>().FirstOrDefault(image => image.Layer == PhotoLayer);
+        var oldPhoto = PhotoImage(tr, layout);
         var frame = PhotoBounds(tr, layout);
         if (oldPhoto != null && string.Equals(PhotoPath(tr, oldPhoto, out var prepared), path, StringComparison.OrdinalIgnoreCase))
         {
@@ -852,7 +912,7 @@ internal static class StationLocationSheets
         {
             if (!IsLive(id)) continue;
             var attribute = (AttributeReference)tr.GetObject(id, OpenMode.ForRead);
-            if (!values.TryGetValue(attribute.Tag, out var value)) continue;
+            if (!values.TryGetValue(attribute.Tag, out var value) || attribute.TextString == value) continue;
             if (!attribute.IsWriteEnabled) attribute.UpgradeOpen();
             attribute.TextString = value;
             attribute.AdjustAlignment(db);

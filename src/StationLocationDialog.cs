@@ -28,7 +28,8 @@ public sealed class Plugin
             {
                 var sheets = StationLocationSheets.List(doc.Database);
                 var hasOverview = StationLocationSheets.HasOverview(doc.Database);
-                using var dialog = new StationLocationDialog(sheets, selected, hasOverview);
+                var withPhoto = StationLocationSheets.SheetsWithPhoto(doc.Database, sheets);
+                using var dialog = new StationLocationDialog(sheets, selected, hasOverview, withPhoto);
                 if (AcApp.ShowModalDialog(dialog) != DialogResult.OK) return;
                 selected = dialog.Selected;
                 switch (dialog.Action)
@@ -147,7 +148,7 @@ internal sealed class StationLocationDialog : Form
     internal StationSheet? Selected => locations.SelectedItems.Count == 1 ? (StationSheet?)locations.SelectedItems[0].Tag : null;
     internal StationLocationAction Action { get; private set; }
 
-    internal StationLocationDialog(List<StationSheet> sheets, StationSheet? previous, bool hasOverview)
+    internal StationLocationDialog(List<StationSheet> sheets, StationSheet? previous, bool hasOverview, HashSet<string> withPhoto)
     {
         Text = "Techbase | Stationlocaties";
         StartPosition = FormStartPosition.CenterParent;
@@ -167,6 +168,8 @@ internal sealed class StationLocationDialog : Form
             ? "Begin met een voorkeurslocatie (VL). Voeg daarna één of meer alternatieve locaties (AL) toe."
             : string.IsNullOrEmpty(pending) ? "Alle trafo’s hebben een VL en minstens één AL."
                 : "VL of AL ontbreekt bij " + pending + ".";
+        if (sheets.Count > 0)
+            message += $"  |  Foto's: {withPhoto.Count}/{sheets.Count} ({sheets.Count - withPhoto.Count} ontbreekt)";
         layout.Controls.Add(new Label
         {
             Dock = DockStyle.Fill, Text = "TRAFOLOCATIEKAARTEN   /   A3\r\n" + message,
@@ -174,15 +177,24 @@ internal sealed class StationLocationDialog : Form
         }, 0, 0);
         locations.Columns.Add("Blad", 250);
         locations.Columns.Add("Locatietype", 200);
+        locations.Columns.Add("Locatiefoto", 140);
+        locations.BeginUpdate();
         foreach (var sheet in sheets)
         {
-            var item = new ListViewItem(new[] { sheet.Name, sheet.Alternative == 0 ? "Voorkeurslocatie" : sheet.Alternative == 1 ? "Alternatieve locatie" : "Alternatieve locatie " + sheet.Alternative })
+            var hasPhoto = withPhoto.Contains(sheet.Name);
+            var item = new ListViewItem(new[] { sheet.Name, sheet.Alternative == 0 ? "Voorkeurslocatie" : sheet.Alternative == 1 ? "Alternatieve locatie" : "Alternatieve locatie " + sheet.Alternative, hasPhoto ? "Aanwezig" : "Ontbreekt" })
                 { Tag = sheet };
+            if (!hasPhoto)
+            {
+                item.UseItemStyleForSubItems = false;
+                item.SubItems[2].ForeColor = Color.Firebrick;
+            }
             locations.Items.Add(item);
             item.Selected = sheet.Name == previous?.Name;
         }
         if (locations.SelectedItems.Count == 0 && locations.Items.Count > 0 && previous == null)
             locations.Items[0].Selected = true;
+        locations.EndUpdate();
         layout.Controls.Add(locations, 0, 1);
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, Padding = new Padding(0, 8, 0, 0) };
         Button Add(string caption, StationLocationAction action, bool enabled = true)
