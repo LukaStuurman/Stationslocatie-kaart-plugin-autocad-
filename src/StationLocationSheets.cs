@@ -126,6 +126,7 @@ internal static class StationLocationSheets
 
     private static void RememberPhotoFolder(Database db, Transaction tr, string file)
     {
+        if (ClipboardPhotos.IsStaged(file)) return;
         var folder = ExistingFolder(file);
         if (folder.Length == 0) return;
         var dictionary = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
@@ -286,18 +287,42 @@ internal static class StationLocationSheets
         }
     }
 
+    internal static void DisableExistingSheetGrids(Database db)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        foreach (var sheet in ReadSheets(db, tr)) DisableLayoutGrid(tr, GetLayout(db, tr, sheet.Name));
+        if (HasOverview(db, tr)) DisableLayoutGrid(tr, GetLayout(db, tr, OverviewName));
+        tr.Commit();
+    }
+
+    private static void DisableLayoutGrid(Transaction tr, Layout layout)
+    {
+        foreach (var item in Entities(tr, layout).OfType<Viewport>())
+        {
+            if (!item.GridOn) continue;
+            if (!item.IsWriteEnabled) item.UpgradeOpen();
+            item.GridOn = false;
+        }
+    }
+
     internal static void OpenSheet(Document doc, string layoutName, bool refreshOverview = true)
     {
         LayoutManager.Current.CurrentLayout = layoutName;
         if (Convert.ToInt32(Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("CVPORT")) != 1)
             doc.Editor.SwitchToPaperSpace();
+        Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("GRIDMODE", (short)0);
 
         var db = doc.Database;
         using var tr = db.TransactionManager.StartTransaction();
         var layout = GetLayout(db, tr, layoutName);
         if (refreshOverview && layoutName == OverviewName && HasOverview(db, tr))
             RefreshOverview(db, tr);
+        DisableLayoutGrid(tr, layout);
         var viewport = MapViewport(tr, layout);
+        foreach (var photo in Entities(tr, layout).OfType<RasterImage>().Where(photo => photo.Layer == PhotoLayer && !photo.IsClipped))
+            if (IsLive(photo.ImageDefId) && tr.GetObject(photo.ImageDefId, OpenMode.ForRead) is RasterImageDef definition &&
+                File.Exists(definition.SourceFileName))
+                FitPhoto(photo, definition.Size);
         if (layoutName != OverviewName && ReadSheets(db, tr).FirstOrDefault(sheet => sheet.Name == layoutName) is { } location)
             Center(tr, viewport, LocationBlock(tr, ModelBlocks(db, tr), location).Position);
         if (!viewport.On)
@@ -520,14 +545,14 @@ internal static class StationLocationSheets
         ClearOverviewMarkers(db, tr, overviewLayer);
         if (sheets.Count == 0) return;
         var blocks = ModelBlocks(db, tr);
-        var locations = sheets.Select(sheet => (Sheet: sheet, Position: LocationBlock(tr, blocks, sheet).Position)).ToArray();
+        var locations = sheets.Select(sheet => (Sheet: sheet, Block: LocationBlock(tr, blocks, sheet))).ToArray();
         var layout = GetLayout(db, tr, OverviewName);
         var viewport = FindMapViewport(tr, layout) ?? NativeStationGeometry.AppendMapViewport(db, tr, layout, true);
         const double margin = 35;
-        var left = locations.Min(location => location.Position.X) - margin;
-        var right = locations.Max(location => location.Position.X) + margin + 45;
-        var bottom = locations.Min(location => location.Position.Y) - margin;
-        var top = locations.Max(location => location.Position.Y) + margin;
+        var left = locations.Min(location => location.Block.Position.X) - margin;
+        var right = locations.Max(location => location.Block.Position.X) + margin + 45;
+        var bottom = locations.Min(location => location.Block.Position.Y) - margin;
+        var top = locations.Max(location => location.Block.Position.Y) + margin;
         var needed = Math.Max((right - left) / viewport.Width, (top - bottom) / viewport.Height) * 1000;
         var step = needed <= 1000 ? 250 : needed <= 5000 ? 500 : 1000;
         var scale = Math.Max(500, (int)Math.Ceiling(needed / step) * step);
@@ -538,9 +563,11 @@ internal static class StationLocationSheets
         SetAttributes(db, tr, layout, new Dictionary<string, string> { ["SCHAAL"] = "1:" + scale });
 
         var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        var foreground = new ObjectIdCollection();
         foreach (var location in locations)
         {
-            var p = location.Position;
+            foreground.Add(location.Block.ObjectId);
+            var p = location.Block.Position;
             var height = scale * 0.003;
             var label = new MText { Location = p + new Vector3d(height * 3, height, 0), TextHeight = height,
                 Contents = location.Sheet.Name, LayerId = overviewLayer, Attachment = AttachmentPoint.MiddleLeft };
@@ -549,7 +576,11 @@ internal static class StationLocationSheets
             var circle = new Circle(p, Vector3d.ZAxis, 20.0) { LayerId = overviewLayer, Color = Autodesk.AutoCAD.Colors.Color.FromRgb(255, 0, 0) };
             model.AppendEntity(circle);
             tr.AddNewlyCreatedDBObject(circle, true);
+            foreground.Add(circle.ObjectId);
+            foreground.Add(label.ObjectId);
         }
+        var drawOrder = (DrawOrderTable)tr.GetObject(model.DrawOrderTableId, OpenMode.ForWrite);
+        drawOrder.MoveToTop(foreground);
         // The overview layer is first created here, so refresh visibility after adding it.
         Isolate(db, tr, sheets);
     }
@@ -609,12 +640,16 @@ internal static class StationLocationSheets
         if (oldPhoto != null)
         {
             var oldDef = (RasterImageDef)tr.GetObject(oldPhoto.ImageDefId, OpenMode.ForRead);
-            if (string.Equals(oldDef.SourceFileName, path, StringComparison.OrdinalIgnoreCase)) return;
+            if (string.Equals(oldDef.SourceFileName, path, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!oldPhoto.IsClipped && File.Exists(path)) FitPhoto(oldPhoto, oldDef.Size);
+                return;
+            }
             if (!oldPhoto.IsWriteEnabled) oldPhoto.UpgradeOpen();
             oldPhoto.Erase();
         }
         if (string.IsNullOrWhiteSpace(path)) return;
-        AttachPhoto(db, tr, layout, path);
+        AttachPhoto(db, tr, layout, ClipboardPhotos.Persist(path, db.Filename));
         RememberPhotoFolder(db, tr, path);
     }
 
@@ -649,21 +684,39 @@ internal static class StationLocationSheets
         definition.Load();
         var id = dictionary.SetAt("TB_FOTO_" + Guid.NewGuid().ToString("N"), definition);
         tr.AddNewlyCreatedDBObject(definition, true);
-        var pixels = definition.Size;
-        const double width = 109.3, height = 74.28;
-        var scale = Math.Min(width / pixels.X, height / pixels.Y);
-        var w = pixels.X * scale;
-        var h = pixels.Y * scale;
         var image = new RasterImage
         {
-            ImageDefId = id, LayerId = Layer(db, tr, PhotoLayer), ShowImage = true,
-            Orientation = new CoordinateSystem3d(new Point3d(307.5 + (width - w) / 2, 219.53 + (height - h) / 2, 0),
-                new Vector3d(w, 0, 0), new Vector3d(0, h, 0))
+            ImageDefId = id, LayerId = Layer(db, tr, PhotoLayer), ShowImage = true
         };
         var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForWrite);
         space.AppendEntity(image);
         tr.AddNewlyCreatedDBObject(image, true);
         RasterImage.EnableReactors(true);
         image.AssociateRasterDef(definition);
+        FitPhoto(image, definition.Size);
+    }
+
+    private static void FitPhoto(RasterImage image, Vector2d pixels)
+    {
+        const double left = 307.5, bottom = 219.53, width = 109.3, height = 74.28;
+        if (pixels.X <= 0 || pixels.Y <= 0)
+            throw new InvalidOperationException("De locatiefoto heeft geen geldige afmetingen.");
+        if (!image.IsWriteEnabled) image.UpgradeOpen();
+
+        var scale = Math.Max(width / pixels.X, height / pixels.Y);
+        var w = pixels.X * scale;
+        var h = pixels.Y * scale;
+        image.Orientation = new CoordinateSystem3d(new Point3d(left + (width - w) / 2, bottom + (height - h) / 2, 0),
+            new Vector3d(w, 0, 0), new Vector3d(0, h, 0));
+
+        var toPixels = image.PixelToModelTransform.Inverse();
+        var lower = new Point3d(left, bottom, 0).TransformBy(toPixels);
+        var upper = new Point3d(left + width, bottom + height, 0).TransformBy(toPixels);
+        image.SetClipBoundary(ClipBoundaryType.Rectangle, new Point2dCollection(new[]
+        {
+            new Point2d(Math.Min(lower.X, upper.X), Math.Min(lower.Y, upper.Y)),
+            new Point2d(Math.Max(lower.X, upper.X), Math.Max(lower.Y, upper.Y))
+        }));
+        image.IsClipped = true;
     }
 }

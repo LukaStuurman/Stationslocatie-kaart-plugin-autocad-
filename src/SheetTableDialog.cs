@@ -14,6 +14,7 @@ internal sealed class SheetTableDialog : Form
         RowHeadersVisible = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
         EditMode = DataGridViewEditMode.EditOnEnter
     };
+    private readonly ClipboardPhotos clipboardPhotos = new();
     internal List<SheetRow> Changes { get; } = new();
     internal string LastPhoto { get; private set; } = "";
 
@@ -22,6 +23,10 @@ internal sealed class SheetTableDialog : Form
         Text = "Alle bladen bewerken";
         StartPosition = FormStartPosition.CenterParent;
         ClientSize = new Size(1050, 450);
+        Font = new Font("Segoe UI", 9F);
+        BackColor = Color.FromArgb(244, 247, 250);
+        grid.BackgroundColor = Color.White;
+        grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(244, 247, 250);
         MinimumSize = new Size(750, 300);
         var headers = new[] { "Blad", "Datum", "Adres / locatie", "Opmerking", "Tekeningnummer", "Locatiefoto" };
         for (var i = 0; i < headers.Length; i++) grid.Columns.Add("Field" + i, headers[i]);
@@ -58,13 +63,30 @@ internal sealed class SheetTableDialog : Form
             grid.EndEdit();
             foreach (DataGridViewRow row in grid.Rows) row.Cells[1].Value = StationFields.Today;
         };
+        var paste = new Button { Text = "Foto plakken", AutoSize = true };
+        paste.Click += (_, _) =>
+        {
+            if (grid.CurrentRow is not { Tag: SheetRow { Overview: false } } row)
+            {
+                MessageBox.Show(this, "Selecteer eerst een locatieblad.", Text);
+                return;
+            }
+            if (grid.EndEdit() && clipboardPhotos.Paste(this) is { } path)
+                row.Cells[5].Value = path;
+        };
         var save = new Button { Text = "Opslaan", AutoSize = true };
         save.Click += (_, _) => Save();
         var cancel = new Button { Text = "Annuleren", AutoSize = true, DialogResult = DialogResult.Cancel };
-        footer.Controls.AddRange(new Control[] { today, save, cancel });
+        footer.Controls.AddRange(new Control[] { today, paste, save, cancel });
         Controls.Add(grid);
         Controls.Add(footer);
         CancelButton = cancel;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) clipboardPhotos.Dispose();
+        base.Dispose(disposing);
     }
 
     private void Save()

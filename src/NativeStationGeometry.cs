@@ -48,13 +48,16 @@ internal static class NativeStationGeometry
     internal static Viewport AppendMapViewport(Database db, Transaction tr, Layout layout, bool overview)
     {
         if (!layout.IsWriteEnabled) layout.UpgradeOpen();
-        layout.Initialize();
+        var paperViewport = layout.Initialize();
+        if (!paperViewport.IsNull && !paperViewport.IsErased &&
+            tr.GetObject(paperViewport, OpenMode.ForWrite) is Viewport paper)
+            paper.GridOn = false;
         var sheet = overview ? Data.Value.Overview : Data.Value.Detail;
         var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForWrite);
         var viewport = new Viewport
         {
             CenterPoint = Point(sheet.View), Width = sheet.View[3], Height = sheet.View[4],
-            ViewDirection = Vector3d.ZAxis, LayerId = ViewportLayerId(db, tr)
+            ViewDirection = Vector3d.ZAxis, GridOn = false, LayerId = ViewportLayerId(db, tr)
         };
         Add(space, tr, viewport);
         if (sheet.Clip != null)

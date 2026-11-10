@@ -25,6 +25,12 @@ Download `Stationslocaties-AutoCAD.zip` uit deze repo, pak het bestand uit, slui
 
 Locatiefoto’s blijven rasterreferenties. Neem ze mee bij overdracht van de DWG. Het ingebouwde sjabloon bevat de A3-indeling en de vectoronderdelen. Projectfoto’s, logo’s en kaartachtergronden komen uit het eigen project.
 
+## Foto’s en PDF’s
+
+Gebruik **Bladeren** of **Plakken** bij de locatiefoto. De foto vult het vaste vak met een centrale uitsnede. Een geplakte afbeelding wordt bij het opslaan als PNG naast de DWG bewaard in `Stationlocaties-fotos`. Bij een onopgeslagen DWG of een map zonder schrijfrechten gebruikt de plug-in een lokale fotomap.
+
+Kies **Bladen plotten**, vink de gewenste layouts aan en stel de PDF-plotter, het papierformaat, de plotstijl, de afdrukstand, de schaal en de uitvoermap één keer in. Elk blad krijgt een afzonderlijke PDF met de layoutnaam. Bij een bestaande bestandsnaam krijgt de nieuwe PDF een volgnummer.
+
 ## Bouwen
 
 Gebruik Windows en een .NET 10 SDK. Voer `Build.ps1` uit om de AutoCAD-bundle en het installatiearchief opnieuw op te bouwen. De API-referenties komen uit het NuGet-pakket AutoCAD.NET.

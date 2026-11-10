@@ -1,4 +1,5 @@
 using System.Drawing;
+using Font = System.Drawing.Font;
 using System.Globalization;
 using System.IO;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -18,6 +19,8 @@ public sealed class Plugin
     {
         var doc = AcApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        try { StationLocationSheets.DisableExistingSheetGrids(doc.Database); }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\nRasterinstellingen: " + ex.Message); }
         StationSheet? selected = null;
         while (true)
         {
@@ -94,6 +97,17 @@ public sealed class Plugin
                             doc.Editor.Regen();
                         }
                         break;
+                    case StationLocationAction.Plot:
+                        var names = sheets.Select(sheet => sheet.Name).ToList();
+                        if (LayoutManager.Current.LayoutExists(StationLocationSheets.OverviewName))
+                            names.Insert(0, StationLocationSheets.OverviewName);
+                        using (var input = new StationPlotDialog(doc.Database, names))
+                            if (AcApp.ShowModalDialog(input) == DialogResult.OK && input.Options is { } options)
+                            {
+                                var count = StationPlot.Export(doc, options);
+                                MessageBox.Show($"{count} PDF’s opgeslagen in {options.Folder}", "Stationlocaties");
+                            }
+                        break;
                     case StationLocationAction.Open when selected != null:
                         StationLocationSheets.OpenSheet(doc, selected.Name);
                         doc.Editor.Regen();
@@ -113,7 +127,7 @@ public sealed class Plugin
     }
 }
 
-internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview }
+internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview, Plot }
 
 internal sealed class StationLocationDialog : Form
 {
@@ -125,12 +139,14 @@ internal sealed class StationLocationDialog : Form
     {
         Text = "Techbase | Stationlocaties";
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(1020, 380);
+        ClientSize = new Size(1020, 410);
+        BackColor = Color.FromArgb(244, 247, 250);
+        Font = new Font("Segoe UI", 9F);
         MinimumSize = new Size(915, 350);
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Padding = new Padding(14) };
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 75));
         var incomplete = sheets.GroupBy(sheet => sheet.Number).Where(group =>
             !group.Any(sheet => sheet.Alternative == 0) || !group.Any(sheet => sheet.Alternative > 0))
             .Select(group => "Trafo " + group.Key);
@@ -156,7 +172,7 @@ internal sealed class StationLocationDialog : Form
         if (locations.SelectedItems.Count == 0 && locations.Items.Count > 0 && previous == null)
             locations.Items[0].Selected = true;
         layout.Controls.Add(locations, 0, 1);
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 8, 0, 0) };
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, Padding = new Padding(0, 8, 0, 0) };
         Button Add(string caption, StationLocationAction action, bool enabled = true)
         {
             var button = new Button { Text = caption, AutoSize = true, Enabled = enabled };
@@ -164,13 +180,18 @@ internal sealed class StationLocationDialog : Form
             actions.Controls.Add(button);
             return button;
         }
-        Add("Locatie plaatsen", StationLocationAction.Add);
+        var add = Add("Locatie plaatsen", StationLocationAction.Add);
+        add.BackColor = Color.FromArgb(25, 89, 126);
+        add.ForeColor = Color.White;
+        add.FlatStyle = FlatStyle.Flat;
+        add.FlatAppearance.BorderSize = 0;
         var edit = Add("Geselecteerd blad", StationLocationAction.Edit, false);
         var open = Add("Open blad", StationLocationAction.Open, false);
         var delete = Add("Locatie verwijderen", StationLocationAction.Delete, false);
         Add("Alle bladen bewerken", StationLocationAction.EditAll, sheets.Count > 0);
         Add("Projectgegevens", StationLocationAction.Project, sheets.Count > 0);
         Add("Open Totaal", StationLocationAction.Overview, sheets.Count > 0);
+        Add("Bladen plotten", StationLocationAction.Plot, sheets.Count > 0);
         var close = new Button { Text = "Sluiten", AutoSize = true, DialogResult = DialogResult.Cancel };
         actions.Controls.Add(close);
         CancelButton = close;
@@ -196,6 +217,7 @@ internal sealed class StationFieldsDialog : Form
     private readonly ComboBox kind = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
     private readonly StationFields original;
     private readonly string photoFolder;
+    private readonly ClipboardPhotos clipboardPhotos = new();
     private readonly CheckBox lookupAddress = new() { Text = "Leeg adres automatisch opzoeken bij PDOK", Checked = true, AutoSize = true };
     private readonly TableLayoutPanel grid = new() { Dock = DockStyle.Fill, ColumnCount = 3, AutoScroll = true, Padding = new Padding(12) };
     private int row;
@@ -217,13 +239,18 @@ internal sealed class StationFieldsDialog : Form
         Text = adding ? "Locatie plaatsen" : project ? "Projectgegevens en blad Totaal" : "Bladgegevens en locatiefoto";
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(680, adding ? 610 : 540);
-        MinimumSize = new Size(610, 345);
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 195));
+        ClientSize = new Size(850, adding ? 725 : 645);
+        MinimumSize = new Size(710, 470);
+        BackColor = Color.FromArgb(244, 247, 250);
+        Font = new Font("Segoe UI", 9F);
+        grid.BackColor = Color.White;
+        grid.Padding = new Padding(20, 14, 20, 12);
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 105));
         if (adding)
         {
+            Heading("Stationlocatie");
             this.number.Value = number;
             kind.Items.AddRange(new[] { "VL – Voorkeurslocatie", "AL – Alternatieve locatie" });
             kind.SelectedIndex = preferred ? 0 : 1;
@@ -231,22 +258,24 @@ internal sealed class StationFieldsDialog : Form
             Row("Trafo-nummer", this.number);
             Row("Locatietype", kind);
         }
-        Row("Projectgegevens", new Label { Text = "Gelden voor alle bladen", AutoSize = true, Anchor = AnchorStyles.Left });
+        Heading("Projectgegevens voor alle bladen");
         TextRow("Projectnaam", initial.Project);
         TextRow("Deelgebied", initial.Area);
         TextRow("Gemeente", initial.Municipality);
         TextRow("Intern projectnummer", initial.ProjectNumber);
         TextRow("Projectnummer opdrachtgever", initial.ClientNumber);
         TextRow("Initialen tekenaar", initial.Drafter);
-        var date = TextRow("Datum", initial.Date);
-        var today = new Button { Text = "Vandaag", AutoSize = true };
+        Heading(project ? "Gegevens voor Totaal" : "Gegevens voor dit blad");
+        var date = TextRow("Datum", initial.Date, hasAction: true);
+        var today = new Button { Text = "Vandaag", AutoSize = true, Anchor = AnchorStyles.Left };
         today.Click += (_, _) => date.Text = StationFields.Today;
         grid.Controls.Add(today, 2, row - 1);
-        var address = TextRow("Adres / locatie", initial.Address);
-        if (adding) Row("RD-coördinaten", lookupAddress);
+        var address = TextRow("Adres / locatie", initial.Address, hasAction: locate != null);
+        var addressRow = row - 1;
+        if (adding) Row("RD-coördinaten", lookupAddress, span: 2);
         if (locate != null)
         {
-            var search = new Button { Text = "PDOK", AutoSize = true };
+            var search = new Button { Text = "PDOK", AutoSize = true, Anchor = AnchorStyles.Left };
             search.Click += (_, _) =>
             {
                 try
@@ -260,14 +289,19 @@ internal sealed class StationFieldsDialog : Form
                     MessageBox.Show(this, ex.Message, Text);
                 }
             };
-            grid.Controls.Add(search, 2, row - 1);
+            grid.Controls.Add(search, 2, addressRow);
         }
         TextRow("Opmerking", initial.Notes);
         TextRow("Tekeningnummer", initial.DrawingNumber);
         if (!project) FileRow("Locatiefoto", initial.Photo, "Afbeeldingen (*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff)|*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff");
-        var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 44, FlowDirection = System.Windows.Forms.FlowDirection.RightToLeft, Padding = new Padding(12, 4, 12, 0) };
+        var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 56, FlowDirection = System.Windows.Forms.FlowDirection.RightToLeft, Padding = new Padding(15, 10, 15, 0) };
         var cancel = new Button { Text = "Annuleren", AutoSize = true, DialogResult = DialogResult.Cancel };
         var ok = new Button { Text = adding ? "Plaatsen op kaart" : "Opslaan", AutoSize = true };
+        ok.BackColor = Color.FromArgb(25, 89, 126);
+        ok.ForeColor = Color.White;
+        ok.FlatStyle = FlatStyle.Flat;
+        ok.FlatAppearance.BorderSize = 0;
+        ok.Padding = new Padding(10, 2, 10, 2);
         ok.Click += (_, _) =>
         {
             var current = Fields;
@@ -288,32 +322,84 @@ internal sealed class StationFieldsDialog : Form
 
     private string Value(string key, string fallback) => fields.TryGetValue(key, out var box) ? box.Text.Trim() : fallback;
 
-    private void Row(string label, Control field)
+    private void Heading(string text)
     {
-        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        grid.Controls.Add(new Label { Text = label, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, row);
-        grid.Controls.Add(field, 1, row++);
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 33));
+        var label = new Label { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = Color.FromArgb(25, 89, 126), Font = new Font(Font, FontStyle.Bold) };
+        grid.Controls.Add(label, 0, row++);
+        grid.SetColumnSpan(label, 3);
     }
 
-    private TextBox TextRow(string label, string value)
+    private void Row(string label, Control field, int span = 1)
     {
-        var box = new TextBox { Text = value, Dock = DockStyle.Fill };
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 33));
+        grid.Controls.Add(new Label { Text = label, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, row);
+        grid.Controls.Add(field, 1, row++);
+        grid.SetColumnSpan(field, span);
+    }
+
+    private TextBox TextRow(string label, string value, bool hasAction = false)
+    {
+        var box = new TextBox { Text = value, Anchor = AnchorStyles.Left | AnchorStyles.Right };
         fields.Add(label, box);
-        Row(label, box);
+        Row(label, box, hasAction ? 1 : 2);
         return box;
     }
 
     private void FileRow(string label, string value, string filter)
     {
-        var field = TextRow(label, value);
-        var browse = new Button { Text = "Bladeren…", AutoSize = true };
+        Heading("Locatiefoto");
+        var field = new TextBox { Text = value, Anchor = AnchorStyles.Left | AnchorStyles.Right,
+            PlaceholderText = "Kies een bestand of plak een afbeelding" };
+        fields.Add(label, field);
+        var browse = new Button { Text = "Bladeren…", AutoSize = true, Anchor = AnchorStyles.Left };
+        var paste = new Button { Text = "Plakken", AutoSize = true, Anchor = AnchorStyles.Left };
+        var editor = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
+        editor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        editor.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        editor.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        editor.Controls.Add(field, 0, 0);
+        editor.Controls.Add(browse, 1, 0);
+        editor.Controls.Add(paste, 2, 0);
+        Row("Afbeelding", editor, 2);
+
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
+        var hint = new Label { Text = "De foto vult het vaste fotovak. Leeg laten verwijdert de foto.",
+            Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft };
+        grid.Controls.Add(hint, 1, row++);
+        grid.SetColumnSpan(hint, 2);
+
+        void PastePhoto()
+        {
+            if (clipboardPhotos.Paste(this) is not { } path) return;
+            field.Text = path;
+            hint.Text = "Foto geplakt. De afbeelding wordt bij het opslaan aan het blad gekoppeld.";
+        }
+
+        paste.Click += (_, _) => PastePhoto();
+        field.KeyDown += (_, e) =>
+        {
+            if (!e.Control || e.KeyCode != Keys.V || !ClipboardPhotos.HasPhoto()) return;
+            e.SuppressKeyPress = true;
+            PastePhoto();
+        };
         browse.Click += (_, _) =>
         {
             using var picker = new OpenFileDialog { Filter = filter, CheckFileExists = true };
             if (Directory.Exists(photoFolder)) picker.InitialDirectory = photoFolder;
-            if (File.Exists(field.Text)) picker.FileName = field.Text;
-            if (picker.ShowDialog(this) == DialogResult.OK) field.Text = picker.FileName;
+            if (File.Exists(field.Text) && !ClipboardPhotos.IsStaged(field.Text)) picker.FileName = field.Text;
+            if (picker.ShowDialog(this) == DialogResult.OK)
+            {
+                field.Text = picker.FileName;
+                hint.Text = "De foto vult het vaste fotovak. Leeg laten verwijdert de foto.";
+            }
         };
-        grid.Controls.Add(browse, 2, row - 1);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) clipboardPhotos.Dispose();
+        base.Dispose(disposing);
     }
 }
