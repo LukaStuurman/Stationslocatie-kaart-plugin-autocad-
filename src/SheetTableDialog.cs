@@ -24,9 +24,19 @@ internal sealed class SheetTableDialog : Form
         StartPosition = FormStartPosition.CenterParent;
         ClientSize = new Size(1050, 450);
         Font = new Font("Segoe UI", 9F);
-        BackColor = Color.FromArgb(244, 247, 250);
+        BackColor = StationTheme.Canvas;
+        ForeColor = StationTheme.Ink;
         grid.BackgroundColor = Color.White;
-        grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(244, 247, 250);
+        grid.BorderStyle = BorderStyle.None;
+        grid.GridColor = StationTheme.Border;
+        grid.EnableHeadersVisualStyles = false;
+        grid.ColumnHeadersHeight = 34;
+        grid.RowTemplate.Height = 27;
+        grid.ColumnHeadersDefaultCellStyle.BackColor = StationTheme.Canvas;
+        grid.ColumnHeadersDefaultCellStyle.ForeColor = StationTheme.Ink;
+        grid.DefaultCellStyle.SelectionBackColor = StationTheme.Tint;
+        grid.DefaultCellStyle.SelectionForeColor = StationTheme.Ink;
+        grid.AlternatingRowsDefaultCellStyle.BackColor = StationTheme.Canvas;
         MinimumSize = new Size(750, 300);
         var headers = new[] { "Blad", "Datum", "Adres / locatie", "Opmerking", "Tekeningnummer", "Locatiefoto" };
         for (var i = 0; i < headers.Length; i++) grid.Columns.Add("Field" + i, headers[i]);
@@ -77,9 +87,17 @@ internal sealed class SheetTableDialog : Form
         var save = new Button { Text = "Opslaan", AutoSize = true };
         save.Click += (_, _) => Save();
         var cancel = new Button { Text = "Annuleren", AutoSize = true, DialogResult = DialogResult.Cancel };
-        footer.Controls.AddRange(new Control[] { today, paste, save, cancel });
+        var confirm = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, WrapContents = false,
+            FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(8, 8, 8, 0) };
+        confirm.Controls.AddRange(new Control[] { save, cancel });
+        footer.Controls.AddRange(new Control[] { today, paste });
+        var bar = new Panel { Dock = DockStyle.Bottom, Height = 54 };
+        footer.Dock = DockStyle.Fill;
+        bar.Controls.Add(footer);
+        bar.Controls.Add(confirm);
         Controls.Add(grid);
-        Controls.Add(footer);
+        Controls.Add(bar);
+        StationTheme.StyleButtons(this, save);
         CancelButton = cancel;
     }
 

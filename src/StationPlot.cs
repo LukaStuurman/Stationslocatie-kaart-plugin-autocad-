@@ -37,7 +37,8 @@ internal sealed class StationPlotDialog : Form
         Font = new Font("Segoe UI", 9);
         ClientSize = new Size(800, 430);
         MinimumSize = new Size(720, 400);
-        BackColor = Color.FromArgb(244, 247, 250);
+        BackColor = StationTheme.Canvas;
+        ForeColor = StationTheme.Ink;
         var content = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 2, RowCount = 2 };
         content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 38));
         content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 62));
@@ -104,13 +105,11 @@ internal sealed class StationPlotDialog : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 54, Padding = new Padding(12, 7, 12, 0),
             FlowDirection = System.Windows.Forms.FlowDirection.RightToLeft };
         var cancel = new Button { Text = "Annuleren", AutoSize = true, DialogResult = DialogResult.Cancel };
-        plot.BackColor = Color.FromArgb(25, 89, 126);
-        plot.ForeColor = Color.White;
-        plot.FlatStyle = FlatStyle.Flat;
         plot.Click += (_, _) => AcceptOptions();
         actions.Controls.AddRange(new Control[] { plot, cancel });
         Controls.Add(content);
         Controls.Add(actions);
+        StationTheme.StyleButtons(this, plot);
         AcceptButton = plot;
         CancelButton = cancel;
     }

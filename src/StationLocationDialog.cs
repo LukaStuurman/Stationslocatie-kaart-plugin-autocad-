@@ -152,14 +152,17 @@ internal sealed class StationLocationDialog : Form
     {
         Text = "Techbase | Stationlocaties";
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(1020, 410);
-        BackColor = Color.FromArgb(244, 247, 250);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        ClientSize = new Size(1000, 580);
+        MinimumSize = new Size(795, 560);
+        BackColor = StationTheme.Canvas;
+        ForeColor = StationTheme.Ink;
         Font = new Font("Segoe UI", 9F);
-        MinimumSize = new Size(915, 350);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Padding = new Padding(14) };
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 2, Padding = new Padding(20) };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 242));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 75));
         var incomplete = sheets.GroupBy(sheet => sheet.Number).Where(group =>
             !group.Any(sheet => sheet.Alternative == 0) || !group.Any(sheet => sheet.Alternative > 0))
             .Select(group => "Trafo " + group.Key);
@@ -168,22 +171,39 @@ internal sealed class StationLocationDialog : Form
             ? "Begin met een voorkeurslocatie (VL). Voeg daarna één of meer alternatieve locaties (AL) toe."
             : string.IsNullOrEmpty(pending) ? "Alle trafo’s hebben een VL en minstens één AL."
                 : "VL of AL ontbreekt bij " + pending + ".";
-        if (sheets.Count > 0)
-            message += $"  |  Foto's: {withPhoto.Count}/{sheets.Count} ({sheets.Count - withPhoto.Count} ontbreekt)";
-        layout.Controls.Add(new Label
-        {
-            Dock = DockStyle.Fill, Text = "TRAFOLOCATIEKAARTEN   /   A3\r\n" + message,
-            TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true
-        }, 0, 0);
-        locations.Columns.Add("Blad", 250);
-        locations.Columns.Add("Locatietype", 200);
-        locations.Columns.Add("Locatiefoto", 140);
+        var missing = sheets.Count - withPhoto.Count;
+        var header = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Margin = Padding.Empty };
+        header.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        header.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
+        header.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        header.Controls.Add(new Label { Text = "Trafolocatiekaarten", Dock = DockStyle.Fill, Font = new Font("Segoe UI", 17F, FontStyle.Bold) }, 0, 0);
+        header.Controls.Add(new Label { Text = message, ForeColor = StationTheme.Muted, Dock = DockStyle.Fill, AutoEllipsis = true }, 0, 1);
+        var summary = $"{sheets.Count} locatiebladen  ·  {withPhoto.Count} met foto";
+        if (missing > 0) summary += $"  ·  {missing} zonder foto";
+        header.Controls.Add(new Label { Text = summary, ForeColor = missing > 0 ? StationTheme.Accent : StationTheme.Muted,
+            Dock = DockStyle.Fill, AutoEllipsis = true }, 0, 2);
+        layout.Controls.Add(header, 0, 0);
+        layout.SetColumnSpan(header, 2);
+
+        locations.BorderStyle = BorderStyle.FixedSingle;
+        locations.HeaderStyle = ColumnHeaderStyle.Nonclickable;
+        locations.Margin = new Padding(0, 0, 16, 0);
+        locations.Columns.Add("Blad", 180);
+        locations.Columns.Add("Locatietype", 195);
+        locations.Columns.Add("Locatiefoto", 115);
         locations.BeginUpdate();
         foreach (var sheet in sheets)
         {
             var hasPhoto = withPhoto.Contains(sheet.Name);
-            var item = new ListViewItem(new[] { sheet.Name, sheet.Alternative == 0 ? "Voorkeurslocatie" : sheet.Alternative == 1 ? "Alternatieve locatie" : "Alternatieve locatie " + sheet.Alternative, hasPhoto ? "Aanwezig" : "Ontbreekt" })
+            var kind = sheet.Alternative switch
+            {
+                0 => "Voorkeurslocatie",
+                1 => "Alternatieve locatie",
+                _ => "Alternatieve locatie " + sheet.Alternative
+            };
+            var item = new ListViewItem(new[] { sheet.Name, kind, hasPhoto ? "Aanwezig" : "Ontbreekt" })
                 { Tag = sheet };
+            if (locations.Items.Count % 2 != 0) item.BackColor = StationTheme.Canvas;
             if (!hasPhoto)
             {
                 item.UseItemStyleForSubItems = false;
@@ -196,33 +216,49 @@ internal sealed class StationLocationDialog : Form
             locations.Items[0].Selected = true;
         locations.EndUpdate();
         layout.Controls.Add(locations, 0, 1);
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, Padding = new Padding(0, 8, 0, 0) };
+        var sidebar = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(12), Margin = Padding.Empty };
+        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoScroll = true, Margin = Padding.Empty };
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        int actionRow = 0;
+        void Group(string caption)
+        {
+            actions.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+            actions.Controls.Add(new Label { Text = caption, Dock = DockStyle.Fill, ForeColor = StationTheme.Muted,
+                TextAlign = ContentAlignment.BottomLeft, Margin = new Padding(0, 0, 0, 4) }, 0, actionRow++);
+        }
+
         Button Add(string caption, StationLocationAction action, bool enabled = true)
         {
-            var button = new Button { Text = caption, AutoSize = true, Enabled = enabled };
+            var button = new Button { Text = caption, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(0, 0, 0, 4), Enabled = enabled };
             button.Click += (_, _) => Choose(action);
-            actions.Controls.Add(button);
+            actions.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));
+            actions.Controls.Add(button, 0, actionRow++);
             return button;
         }
+
+        Group("Locaties");
         var add = Add("Locatie plaatsen", StationLocationAction.Add);
-        add.BackColor = Color.FromArgb(25, 89, 126);
-        add.ForeColor = Color.White;
-        add.FlatStyle = FlatStyle.Flat;
-        add.FlatAppearance.BorderSize = 0;
-        var edit = Add("Geselecteerd blad", StationLocationAction.Edit, false);
         var open = Add("Open blad", StationLocationAction.Open, false);
+        var edit = Add("Blad bewerken", StationLocationAction.Edit, false);
         var delete = Add("Locatie verwijderen", StationLocationAction.Delete, false);
+        Group("Project");
         Add("Alle bladen bewerken", StationLocationAction.EditAll, sheets.Count > 0);
         Add("Projectgegevens", StationLocationAction.Project, sheets.Count > 0);
+        Group("Uitvoer");
         Add(hasOverview ? "Totaal vernieuwen" : "Totaal maken", StationLocationAction.Overview, sheets.Count > 0 || hasOverview);
         Add("Bladen plotten", StationLocationAction.Plot, sheets.Count > 0 || hasOverview);
-        var close = new Button { Text = "Sluiten", AutoSize = true, DialogResult = DialogResult.Cancel };
-        actions.Controls.Add(close);
+        var close = new Button { Text = "Sluiten", Dock = DockStyle.Bottom, Height = 32, DialogResult = DialogResult.Cancel };
+        sidebar.Controls.Add(actions);
+        sidebar.Controls.Add(close);
+        layout.Controls.Add(sidebar, 1, 1);
+        StationTheme.StyleButtons(sidebar, add, delete);
         CancelButton = close;
-        locations.SelectedIndexChanged += (_, _) => edit.Enabled = open.Enabled = delete.Enabled = Selected != null;
-        Shown += (_, _) => edit.Enabled = open.Enabled = delete.Enabled = Selected != null;
+
+        void UpdateSelection() => edit.Enabled = open.Enabled = delete.Enabled = Selected != null;
+        locations.SelectedIndexChanged += (_, _) => UpdateSelection();
+        Shown += (_, _) => UpdateSelection();
         locations.DoubleClick += (_, _) => { if (Selected != null) Choose(StationLocationAction.Open); };
-        layout.Controls.Add(actions, 0, 2);
         Controls.Add(layout);
     }
 
@@ -267,7 +303,8 @@ internal sealed class StationFieldsDialog : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         ClientSize = new Size(850, project ? 645 : 725);
         MinimumSize = new Size(710, 470);
-        BackColor = Color.FromArgb(244, 247, 250);
+        BackColor = StationTheme.Canvas;
+        ForeColor = StationTheme.Ink;
         Font = new Font("Segoe UI", 9F);
         grid.BackColor = Color.White;
         grid.Padding = new Padding(20, 14, 20, 12);
@@ -333,11 +370,6 @@ internal sealed class StationFieldsDialog : Form
         var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 56, FlowDirection = System.Windows.Forms.FlowDirection.RightToLeft, Padding = new Padding(15, 10, 15, 0) };
         var cancel = new Button { Text = "Annuleren", AutoSize = true, DialogResult = DialogResult.Cancel };
         var ok = new Button { Text = adding ? "Plaatsen op kaart" : "Opslaan", AutoSize = true };
-        ok.BackColor = Color.FromArgb(25, 89, 126);
-        ok.ForeColor = Color.White;
-        ok.FlatStyle = FlatStyle.Flat;
-        ok.FlatAppearance.BorderSize = 0;
-        ok.Padding = new Padding(10, 2, 10, 2);
         ok.Click += (_, _) =>
         {
             var suffix = alternative.Text.Trim();
@@ -362,6 +394,7 @@ internal sealed class StationFieldsDialog : Form
         footer.Controls.Add(cancel);
         Controls.Add(grid);
         Controls.Add(footer);
+        StationTheme.StyleButtons(this, ok);
         AcceptButton = ok;
         CancelButton = cancel;
     }
@@ -372,7 +405,7 @@ internal sealed class StationFieldsDialog : Form
     {
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 33));
         var label = new Label { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
-            ForeColor = Color.FromArgb(25, 89, 126), Font = new Font(Font, FontStyle.Bold) };
+            ForeColor = StationTheme.Accent, Font = new Font(Font, FontStyle.Bold) };
         grid.Controls.Add(label, 0, row++);
         grid.SetColumnSpan(label, 3);
     }
