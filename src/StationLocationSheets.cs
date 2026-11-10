@@ -643,37 +643,30 @@ internal static class StationLocationSheets
     private static void RefreshOverview(Database db, Transaction tr, string? excluded = null)
     {
         var sheets = ReadSheets(db, tr, excluded);
-        if (!HasOverview(db, tr))
-        {
-            if (sheets.Count == 0) return;
-            var stationBlocks = ModelBlocks(db, tr);
-            var modelSpace = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
-            var order = (DrawOrderTable)tr.GetObject(modelSpace.DrawOrderTableId, OpenMode.ForWrite);
-            order.MoveToTop(new ObjectIdCollection(sheets.Select(sheet => LocationBlock(tr, stationBlocks, sheet).ObjectId).ToArray()));
-            Isolate(db, tr, sheets);
-            return;
-        }
-
         var overviewLayer = Layer(db, tr, OverviewLayer);
         ClearOverviewMarkers(db, tr, overviewLayer);
         if (sheets.Count == 0) return;
         var blocks = ModelBlocks(db, tr);
         var locations = sheets.Select(sheet => (Sheet: sheet, Block: LocationBlock(tr, blocks, sheet))).ToArray();
-        var layout = GetLayout(db, tr, OverviewName);
-        var viewport = FindMapViewport(tr, layout) ?? NativeStationGeometry.AppendMapViewport(db, tr, layout, true);
-        const double margin = 35;
-        var left = locations.Min(location => location.Block.Position.X) - margin;
-        var right = locations.Max(location => location.Block.Position.X) + margin + 45;
-        var bottom = locations.Min(location => location.Block.Position.Y) - margin;
-        var top = locations.Max(location => location.Block.Position.Y) + margin;
-        var needed = Math.Max((right - left) / viewport.Width, (top - bottom) / viewport.Height) * 1000;
-        var step = needed <= 1000 ? 250 : needed <= 5000 ? 500 : 1000;
-        var scale = Math.Max(500, (int)Math.Ceiling(needed / step) * step);
-        Center(tr, viewport, new Point3d((left + right) / 2, (bottom + top) / 2, 0), scale);
-        var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-        var visible = sheets.Select(sheet => layers[sheet.Layer]).Append(overviewLayer);
-        viewport.ThawLayersInViewport(new ObjectIdCollection(visible.ToArray()).GetEnumerator());
-        SetAttributes(db, tr, layout, new Dictionary<string, string> { ["SCHAAL"] = "1:" + scale });
+        var scale = 500;
+        if (HasOverview(db, tr))
+        {
+            var layout = GetLayout(db, tr, OverviewName);
+            var viewport = FindMapViewport(tr, layout) ?? NativeStationGeometry.AppendMapViewport(db, tr, layout, true);
+            const double margin = 35;
+            var left = locations.Min(location => location.Block.Position.X) - margin;
+            var right = locations.Max(location => location.Block.Position.X) + margin + 45;
+            var bottom = locations.Min(location => location.Block.Position.Y) - margin;
+            var top = locations.Max(location => location.Block.Position.Y) + margin;
+            var needed = Math.Max((right - left) / viewport.Width, (top - bottom) / viewport.Height) * 1000;
+            var step = needed <= 1000 ? 250 : needed <= 5000 ? 500 : 1000;
+            scale = Math.Max(500, (int)Math.Ceiling(needed / step) * step);
+            Center(tr, viewport, new Point3d((left + right) / 2, (bottom + top) / 2, 0), scale);
+            var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            var visible = sheets.Select(sheet => layers[sheet.Layer]).Append(overviewLayer);
+            viewport.ThawLayersInViewport(new ObjectIdCollection(visible.ToArray()).GetEnumerator());
+            SetAttributes(db, tr, layout, new Dictionary<string, string> { ["SCHAAL"] = "1:" + scale });
+        }
 
         var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
         var foreground = new ObjectIdCollection();
@@ -694,7 +687,7 @@ internal static class StationLocationSheets
         }
         var drawOrder = (DrawOrderTable)tr.GetObject(model.DrawOrderTableId, OpenMode.ForWrite);
         drawOrder.MoveToTop(foreground);
-        // The overview layer is first created here, so refresh visibility after adding it.
+        // Keep model-space markers out of the detail viewports.
         Isolate(db, tr, sheets);
     }
 
