@@ -15,8 +15,9 @@ internal sealed class SheetTableDialog : Form
         EditMode = DataGridViewEditMode.EditOnEnter
     };
     internal List<SheetRow> Changes { get; } = new();
+    internal string LastPhoto { get; private set; } = "";
 
-    internal SheetTableDialog(IReadOnlyList<SheetRow> sheets)
+    internal SheetTableDialog(IReadOnlyList<SheetRow> sheets, string photoFolder)
     {
         Text = "Alle bladen bewerken";
         StartPosition = FormStartPosition.CenterParent;
@@ -45,8 +46,10 @@ internal sealed class SheetTableDialog : Form
                 Filter = "Afbeeldingen|*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff",
                 CheckFileExists = true
             };
+            var folder = string.IsNullOrEmpty(LastPhoto) ? photoFolder : Path.GetDirectoryName(LastPhoto);
+            if (Directory.Exists(folder)) picker.InitialDirectory = folder!;
             if (File.Exists(Convert.ToString(cell.Value))) picker.FileName = Convert.ToString(cell.Value);
-            if (picker.ShowDialog(this) == DialogResult.OK) cell.Value = picker.FileName;
+            if (picker.ShowDialog(this) == DialogResult.OK) cell.Value = LastPhoto = picker.FileName;
         };
         var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(8) };
         var today = new Button { Text = "Vandaag voor alle bladen", AutoSize = true };

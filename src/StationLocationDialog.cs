@@ -30,17 +30,17 @@ public sealed class Plugin
                 switch (dialog.Action)
                 {
                     case StationLocationAction.Add:
-                        var project = StationLocationSheets.ProjectFields(doc.Database);
+                        var project = StationLocationSheets.ProjectFields(doc.Database, selected);
                         using (var input = new StationFieldsDialog(project with
                         {
                             Date = StationFields.Today, Address = "", Notes = "", DrawingNumber = "", Photo = ""
-                        }, adding: true, project: sheets.Count == 0,
+                        }, adding: true,
                             number: selected?.Number ?? 1, preferred: !sheets.Any(s => s.Number == (selected?.Number ?? 1) && s.Alternative == 0),
-                            template: selected?.Template ?? sheets.LastOrDefault()?.Template ?? "",
+                            photoFolder: StationLocationSheets.PhotoFolder(doc.Database),
                             existingPreferred: sheets.Where(s => s.Alternative == 0).Select(s => s.Number).ToHashSet()))
                         {
                             if (AcApp.ShowModalDialog(input) != DialogResult.OK) break;
-                            var sheet = StationLocationSheets.Next(doc.Database, input.Number, input.Preferred, input.Template);
+                            var sheet = StationLocationSheets.Next(doc.Database, input.Number, input.Preferred);
                             var fields = input.Fields;
                             if (string.IsNullOrWhiteSpace(fields.DrawingNumber))
                                 fields = fields with { DrawingNumber = StationLocationSheets.DefaultDrawingNumber(sheet) };
@@ -63,6 +63,13 @@ public sealed class Plugin
                                     throw new InvalidOperationException("Kies voor de draairichting een tweede punt naast de trafo.");
                                 rotation = Math.Atan2(delta.Y, delta.X);
                             }
+                            if (input.LookupAddress && string.IsNullOrWhiteSpace(fields.Address))
+                            {
+                                editor.WriteMessage("\nDichtstbijzijnd adres ophalen bij PDOK…");
+                                var result = PdokAddress.Lookup(point);
+                                if (result.Address != null) fields = fields with { Address = result.Address };
+                                editor.WriteMessage("\n" + result.Message);
+                            }
                             StationLocationSheets.Create(doc, sheet, fields, new Point3d(point.X, point.Y, 0), rotation);
                             selected = sheet;
                             editor.Regen();
@@ -70,7 +77,10 @@ public sealed class Plugin
                         }
                         break;
                     case StationLocationAction.Edit when selected != null:
-                        using (var input = new StationFieldsDialog(StationLocationSheets.ReadFields(doc.Database, selected)))
+                        using (var input = new StationFieldsDialog(StationLocationSheets.ReadFields(doc.Database, selected)
+                            .FillSharedFrom(StationLocationSheets.ProjectFields(doc.Database)),
+                            photoFolder: StationLocationSheets.PhotoFolder(doc.Database),
+                            locate: () => StationLocationSheets.Position(doc.Database, selected)))
                             if (AcApp.ShowModalDialog(input) == DialogResult.OK)
                             {
                                 StationLocationSheets.Edit(doc, selected, input.Fields);
@@ -78,10 +88,11 @@ public sealed class Plugin
                             }
                         break;
                     case StationLocationAction.EditAll:
-                        using (var table = new SheetTableDialog(StationLocationSheets.ReadSheetRows(doc.Database, sheets)))
+                        using (var table = new SheetTableDialog(StationLocationSheets.ReadSheetRows(doc.Database, sheets),
+                            StationLocationSheets.PhotoFolder(doc.Database)))
                             if (AcApp.ShowModalDialog(table) == DialogResult.OK && table.Changes.Count > 0)
                             {
-                                StationLocationSheets.UpdateSheetRows(doc.Database, table.Changes);
+                                StationLocationSheets.UpdateSheetRows(doc.Database, table.Changes, table.LastPhoto);
                                 doc.Editor.Regen();
                             }
                         break;
@@ -190,11 +201,13 @@ internal sealed class StationFieldsDialog : Form
     private readonly NumericUpDown number = new() { Minimum = 1, Maximum = 999999, Width = 90 };
     private readonly ComboBox kind = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
     private readonly StationFields original;
+    private readonly string photoFolder;
+    private readonly CheckBox lookupAddress = new() { Text = "Leeg adres automatisch opzoeken bij PDOK", Checked = true, AutoSize = true };
     private readonly TableLayoutPanel grid = new() { Dock = DockStyle.Fill, ColumnCount = 3, AutoScroll = true, Padding = new Padding(12) };
     private int row;
     internal int Number => (int)number.Value;
     internal bool Preferred => kind.SelectedIndex == 0;
-    internal string Template => Value("Voorbeeld-DWG", "");
+    internal bool LookupAddress => lookupAddress.Checked;
     internal StationFields Fields => new(Value("Projectnaam", original.Project), Value("Deelgebied", original.Area),
         Value("Gemeente", original.Municipality), Value("Intern projectnummer", original.ProjectNumber),
         Value("Projectnummer opdrachtgever", original.ClientNumber), Value("Initialen tekenaar", original.Drafter),
@@ -202,13 +215,15 @@ internal sealed class StationFieldsDialog : Form
         Value("Tekeningnummer", original.DrawingNumber), Value("Locatiefoto", original.Photo));
 
     internal StationFieldsDialog(StationFields initial, bool adding = false, bool project = false,
-        int number = 1, bool preferred = true, string template = "", HashSet<int>? existingPreferred = null)
+        int number = 1, bool preferred = true, string photoFolder = "", HashSet<int>? existingPreferred = null,
+        Func<Point3d>? locate = null)
     {
         original = initial;
+        this.photoFolder = photoFolder;
         Text = adding ? "Locatie plaatsen" : project ? "Projectgegevens en blad Totaal" : "Bladgegevens en locatiefoto";
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(680, adding && project ? 645 : project ? 500 : 390);
+        ClientSize = new Size(680, adding ? 610 : 540);
         MinimumSize = new Size(610, 345);
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 195));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -221,25 +236,41 @@ internal sealed class StationFieldsDialog : Form
             this.number.ValueChanged += (_, _) => kind.SelectedIndex = existingPreferred?.Contains(Number) == true ? 1 : 0;
             Row("Trafo-nummer", this.number);
             Row("Locatietype", kind);
-            FileRow("Voorbeeld-DWG", template, "AutoCAD-tekening (*.dwg)|*.dwg");
         }
-        if (project)
-        {
-            TextRow("Projectnaam", initial.Project);
-            TextRow("Deelgebied", initial.Area);
-            TextRow("Gemeente", initial.Municipality);
-            TextRow("Intern projectnummer", initial.ProjectNumber);
-            TextRow("Projectnummer opdrachtgever", initial.ClientNumber);
-            TextRow("Initialen tekenaar", initial.Drafter);
-        }
+        Row("Projectgegevens", new Label { Text = "Gelden voor alle bladen", AutoSize = true, Anchor = AnchorStyles.Left });
+        TextRow("Projectnaam", initial.Project);
+        TextRow("Deelgebied", initial.Area);
+        TextRow("Gemeente", initial.Municipality);
+        TextRow("Intern projectnummer", initial.ProjectNumber);
+        TextRow("Projectnummer opdrachtgever", initial.ClientNumber);
+        TextRow("Initialen tekenaar", initial.Drafter);
         var date = TextRow("Datum", initial.Date);
         var today = new Button { Text = "Vandaag", AutoSize = true };
         today.Click += (_, _) => date.Text = StationFields.Today;
         grid.Controls.Add(today, 2, row - 1);
-        TextRow("Adres / locatie", initial.Address);
+        var address = TextRow("Adres / locatie", initial.Address);
+        if (adding) Row("RD-coördinaten", lookupAddress);
+        if (locate != null)
+        {
+            var search = new Button { Text = "PDOK", AutoSize = true };
+            search.Click += (_, _) =>
+            {
+                try
+                {
+                    var result = PdokAddress.Lookup(locate());
+                    if (result.Address != null) address.Text = result.Address;
+                    else MessageBox.Show(this, result.Message, Text);
+                }
+                catch (System.Exception ex)
+                {
+                    MessageBox.Show(this, ex.Message, Text);
+                }
+            };
+            grid.Controls.Add(search, 2, row - 1);
+        }
         TextRow("Opmerking", initial.Notes);
         TextRow("Tekeningnummer", initial.DrawingNumber);
-        if (!project || adding) FileRow("Locatiefoto", initial.Photo, "Afbeeldingen (*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff)|*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff");
+        if (!project) FileRow("Locatiefoto", initial.Photo, "Afbeeldingen (*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff)|*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff");
         var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 44, FlowDirection = System.Windows.Forms.FlowDirection.RightToLeft, Padding = new Padding(12, 4, 12, 0) };
         var cancel = new Button { Text = "Annuleren", AutoSize = true, DialogResult = DialogResult.Cancel };
         var ok = new Button { Text = adding ? "Plaatsen op kaart" : "Opslaan", AutoSize = true };
@@ -248,8 +279,6 @@ internal sealed class StationFieldsDialog : Form
             var current = Fields;
             if (!DateTime.TryParseExact(current.Date, new[] { "d-M-yyyy", "dd-MM-yyyy" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
                 MessageBox.Show(this, "Gebruik een datum als 10-11-2026.", Text);
-            else if (adding && (!Path.IsPathFullyQualified(Template) || !File.Exists(Template)))
-                MessageBox.Show(this, "Selecteer de DWG met de voorbeeldbladen ‘Trafo 1 VL’ en ‘Totaal’.", Text);
             else if (current.Photo.Length > 0 && !current.Photo.Equals(original.Photo, StringComparison.OrdinalIgnoreCase) &&
                 (!Path.IsPathFullyQualified(current.Photo) || !File.Exists(current.Photo)))
                 MessageBox.Show(this, "Selecteer een bestaand afbeeldingsbestand.", Text);
@@ -287,6 +316,7 @@ internal sealed class StationFieldsDialog : Form
         browse.Click += (_, _) =>
         {
             using var picker = new OpenFileDialog { Filter = filter, CheckFileExists = true };
+            if (Directory.Exists(photoFolder)) picker.InitialDirectory = photoFolder;
             if (File.Exists(field.Text)) picker.FileName = field.Text;
             if (picker.ShowDialog(this) == DialogResult.OK) field.Text = picker.FileName;
         };

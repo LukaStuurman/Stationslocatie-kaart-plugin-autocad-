@@ -1,18 +1,36 @@
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 
 namespace Stationslocaties;
 
-internal sealed record StationSheet(string Name, int Number, int Alternative, string Layer, string Template);
+internal sealed record StationSheet(string Name, int Number, int Alternative, string Layer);
 
 internal sealed record StationFields(string Project, string Area, string Municipality, string ProjectNumber,
     string ClientNumber, string Drafter, string Date, string Address, string Notes, string DrawingNumber, string Photo)
 {
     internal static string Today => DateTime.Today.ToString("d-M-yyyy", CultureInfo.InvariantCulture);
     internal static StationFields Empty => new("", "", "", "", "", "", Today, "", "", "", "");
+
+    internal StationFields FillSharedFrom(StationFields other)
+    {
+        static string Value(string current, string fallback) => string.IsNullOrWhiteSpace(current) ? fallback : current;
+        return this with
+        {
+            Project = Value(Project, other.Project), Area = Value(Area, other.Area),
+            Municipality = Value(Municipality, other.Municipality), ProjectNumber = Value(ProjectNumber, other.ProjectNumber),
+            ClientNumber = Value(ClientNumber, other.ClientNumber), Drafter = Value(Drafter, other.Drafter)
+        };
+    }
+
+    internal Dictionary<string, string> SharedAttributes() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["PROJECTNAAM"] = Project, ["DEELGEBIED"] = Area, ["GEMEENTE"] = Municipality,
+        ["PROJECTNR.CIRCET"] = ProjectNumber, ["PROJECTNR.OPDR."] = ClientNumber, ["GET"] = Drafter
+    };
 
     internal Dictionary<string, string> Attributes() => new(StringComparer.OrdinalIgnoreCase)
     {
@@ -31,7 +49,7 @@ internal static class StationLocationSheets
     private const string Symbol = "TB_STATION_TRAFO";
     private const string PhotoLayer = "TB_STATION_FOTO";
     private const string OverviewLayer = "TB_STATION_OVERZICHT";
-    private const string SourcePhotoLayer = "Wipout 2";
+    private const string PhotoFolderKey = "TB_STATION_FOTOMAP";
     private const string TitleBlock = "Onderhoek Spitters";
 
     internal static List<StationSheet> List(Database db)
@@ -40,14 +58,14 @@ internal static class StationLocationSheets
         return ReadSheets(db, tr).OrderBy(sheet => sheet.Number).ThenBy(sheet => sheet.Alternative).ToList();
     }
 
-    internal static StationSheet Next(Database db, int number, bool preferred, string template)
+    internal static StationSheet Next(Database db, int number, bool preferred)
     {
         var sameStation = List(db).Where(sheet => sheet.Number == number).ToArray();
         if (preferred && sameStation.Any(sheet => sheet.Alternative == 0))
             throw new InvalidOperationException($"Trafo {number} heeft al een voorkeurslocatie.");
         var alternative = preferred ? 0 : sameStation.Select(sheet => sheet.Alternative).DefaultIfEmpty().Max() + 1;
         var suffix = alternative switch { 0 => "VL", 1 => "AL", _ => "AL" + alternative };
-        return new($"Trafo {number} {suffix}", number, alternative, "TB_STATION_" + number + "_" + suffix, template);
+        return new($"Trafo {number} {suffix}", number, alternative, "TB_STATION_" + number + "_" + suffix);
     }
 
     internal static string DefaultDrawingNumber(StationSheet sheet) =>
@@ -57,10 +75,69 @@ internal static class StationLocationSheets
     internal static StationFields ReadFields(Database db, StationSheet sheet)
         => ReadFields(db, sheet.Name);
 
-    internal static StationFields ProjectFields(Database db)
+    internal static Point3d Position(Database db, StationSheet sheet)
     {
         using var tr = db.TransactionManager.StartTransaction();
-        return HasOverview(db, tr) ? ReadFields(db, OverviewName) : StationFields.Empty;
+        return LocationBlock(tr, ModelBlocks(db, tr), sheet).Position;
+    }
+
+    internal static StationFields ProjectFields(Database db, StationSheet? preferred = null)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        var project = HasOverview(db, tr) ? ReadFields(db, OverviewName) : StationFields.Empty;
+        var shared = preferred == null ? project : ReadFields(db, preferred).FillSharedFrom(project);
+        foreach (var sheet in ReadSheets(db, tr))
+            shared = shared.FillSharedFrom(ReadFields(db, sheet));
+        return project with
+        {
+            Project = shared.Project, Area = shared.Area, Municipality = shared.Municipality,
+            ProjectNumber = shared.ProjectNumber, ClientNumber = shared.ClientNumber, Drafter = shared.Drafter
+        };
+    }
+
+    internal static string PhotoFolder(Database db)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        var dictionary = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+        if (dictionary.Contains(PhotoFolderKey))
+        {
+            var record = (Xrecord)tr.GetObject(dictionary.GetAt(PhotoFolderKey), OpenMode.ForRead);
+            using var data = record.Data;
+            var path = data?.AsArray().FirstOrDefault().Value as string;
+            if (Directory.Exists(path)) return path!;
+        }
+        foreach (var sheet in ReadSheets(db, tr).AsEnumerable().Reverse())
+        {
+            var folder = ExistingFolder(ReadFields(db, sheet).Photo);
+            if (folder.Length > 0) return folder;
+        }
+        return "";
+    }
+
+    private static string ExistingFolder(string file)
+    {
+        if (!Path.IsPathFullyQualified(file)) return "";
+        var folder = Path.GetDirectoryName(file);
+        return Directory.Exists(folder) ? folder! : "";
+    }
+
+    private static void RememberPhotoFolder(Database db, Transaction tr, string file)
+    {
+        var folder = ExistingFolder(file);
+        if (folder.Length == 0) return;
+        var dictionary = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+        Xrecord record;
+        if (dictionary.Contains(PhotoFolderKey))
+            record = (Xrecord)tr.GetObject(dictionary.GetAt(PhotoFolderKey), OpenMode.ForWrite);
+        else
+        {
+            if (!dictionary.IsWriteEnabled) dictionary.UpgradeOpen();
+            record = new Xrecord();
+            dictionary.SetAt(PhotoFolderKey, record);
+            tr.AddNewlyCreatedDBObject(record, true);
+        }
+        using var data = new ResultBuffer(new TypedValue(1, folder));
+        record.Data = data;
     }
 
     private static StationFields ReadFields(Database db, string name)
@@ -96,8 +173,7 @@ internal static class StationLocationSheets
         }
 
         using var source = new Database(false, true);
-        source.ReadDwgFile(sheet.Template, FileOpenMode.OpenForReadAndAllShare, true, null);
-        source.CloseInput(true);
+        LoadTemplate(source);
         using var sourceTr = source.TransactionManager.StartTransaction();
         var sample = GetLayout(source, sourceTr, TemplateLayout);
         var overviewSample = newOverview ? GetLayout(source, sourceTr, OverviewName) : null;
@@ -112,11 +188,11 @@ internal static class StationLocationSheets
             }
             using var tr = db.TransactionManager.StartTransaction();
             var layout = GetLayout(db, tr, sheet.Name, OpenMode.ForWrite);
-            var viewport = CloneSheet(doc, tr, source, sourceTr, sample, layout, sheet.Template);
+            var viewport = CloneSheet(tr, source, sourceTr, sample, layout);
             if (overviewSample != null)
             {
                 var overview = GetLayout(db, tr, OverviewName, OpenMode.ForWrite);
-                CloneSheet(doc, tr, source, sourceTr, overviewSample, overview, sheet.Template);
+                CloneSheet(tr, source, sourceTr, overviewSample, overview);
                 overview.CreateExtensionDictionary();
                 var dictionary = (DBDictionary)tr.GetObject(overview.ExtensionDictionary, OpenMode.ForWrite);
                 var marker = new Xrecord();
@@ -141,6 +217,7 @@ internal static class StationLocationSheets
             Center(viewport, point);
             ClearRevisions(db, tr, layout);
             WriteFields(db, tr, layout, fields);
+            WriteSharedProject(db, tr, fields);
             RefreshOverview(db, tr);
             tr.Commit();
         }
@@ -159,6 +236,7 @@ internal static class StationLocationSheets
         var layout = GetLayout(db, tr, sheet.Name);
         Center(MapViewport(tr, layout), LocationBlock(tr, ModelBlocks(db, tr), sheet).Position);
         WriteFields(db, tr, layout, fields);
+        WriteSharedProject(db, tr, fields);
         RefreshOverview(db, tr);
         tr.Commit();
     }
@@ -170,7 +248,7 @@ internal static class StationLocationSheets
         return rows;
     }
 
-    internal static void UpdateSheetRows(Database db, IReadOnlyList<SheetRow> rows)
+    internal static void UpdateSheetRows(Database db, IReadOnlyList<SheetRow> rows, string lastPhoto)
     {
         using var tr = db.TransactionManager.StartTransaction();
         foreach (var row in rows)
@@ -184,6 +262,7 @@ internal static class StationLocationSheets
             });
             if (!row.Overview) SetPhoto(db, tr, layout, fields.Photo);
         }
+        RememberPhotoFolder(db, tr, lastPhoto);
         tr.Commit();
     }
 
@@ -191,14 +270,8 @@ internal static class StationLocationSheets
     {
         using var tr = db.TransactionManager.StartTransaction();
         if (!HasOverview(db, tr)) throw new InvalidOperationException("Plaats eerst een locatie om het project te starten.");
-        var shared = new Dictionary<string, string>
-        {
-            ["PROJECTNAAM"] = fields.Project, ["DEELGEBIED"] = fields.Area, ["GEMEENTE"] = fields.Municipality,
-            ["PROJECTNR.CIRCET"] = fields.ProjectNumber, ["PROJECTNR.OPDR."] = fields.ClientNumber, ["GET"] = fields.Drafter
-        };
-        foreach (var sheet in ReadSheets(db, tr)) SetAttributes(db, tr, GetLayout(db, tr, sheet.Name), shared);
+        WriteSharedProject(db, tr, fields);
         var overview = GetLayout(db, tr, OverviewName);
-        SetAttributes(db, tr, overview, shared);
         SetAttributes(db, tr, overview, new Dictionary<string, string>
         {
             ["TDD"] = fields.Date, ["TEKENINGNUMMER"] = fields.DrawingNumber,
@@ -206,6 +279,13 @@ internal static class StationLocationSheets
         });
         RefreshOverview(db, tr);
         tr.Commit();
+    }
+
+    private static void WriteSharedProject(Database db, Transaction tr, StationFields fields)
+    {
+        var shared = fields.SharedAttributes();
+        foreach (var sheet in ReadSheets(db, tr)) SetAttributes(db, tr, GetLayout(db, tr, sheet.Name), shared);
+        if (HasOverview(db, tr)) SetAttributes(db, tr, GetLayout(db, tr, OverviewName), shared);
     }
 
     private static bool HasOverview(Database db, Transaction tr)
@@ -229,15 +309,33 @@ internal static class StationLocationSheets
         return matches[0];
     }
 
-    private static Viewport CloneSheet(Document doc, Transaction tr, Database source, Transaction sourceTr,
-        Layout sample, Layout layout, string template)
+    private static void LoadTemplate(Database source)
+    {
+        var temporary = Directory.CreateTempSubdirectory("Stationslocaties-");
+        var path = Path.Combine(temporary.FullName, "StationTemplate.dxf");
+        var log = Path.Combine(temporary.FullName, "StationTemplate.log");
+        try
+        {
+            using (var resource = typeof(StationLocationSheets).Assembly.GetManifestResourceStream("StationTemplate.dxf.gz")
+                ?? throw new InvalidOperationException("Het ingebouwde stationssjabloon ontbreekt."))
+            using (var gzip = new GZipStream(resource, CompressionMode.Decompress))
+            using (var file = File.Create(path))
+                gzip.CopyTo(file);
+            source.DxfIn(path, log);
+        }
+        finally
+        {
+            File.Delete(path);
+            File.Delete(log);
+            temporary.Delete();
+        }
+    }
+
+    private static Viewport CloneSheet(Transaction tr, Database source, Transaction sourceTr, Layout sample, Layout layout)
     {
         var sampleViewport = MapViewport(sourceTr, sample);
-        var paperViewport = PaperViewport(sample);
         var selected = Entities(sourceTr, sample).Where(entity =>
-            (entity is not Viewport || entity.ObjectId == sampleViewport.ObjectId) &&
-            entity.ObjectId != paperViewport &&
-            (entity is not RasterImage || entity.Layer != SourcePhotoLayer)).ToArray();
+            entity is not Viewport || entity.ObjectId == sampleViewport.ObjectId).ToArray();
         _ = Title(sourceTr, sample);
         using var settings = new PlotSettings(false);
         settings.CopyFrom(sample);
@@ -251,7 +349,6 @@ internal static class StationLocationSheets
             viewport.NonRectClipEntityId = map[sampleViewport.NonRectClipEntityId].Value;
             viewport.NonRectClipOn = true;
         }
-        RepairLogos(tr, layout, template, doc);
         PreserveDrawOrder(sourceTr, sample, tr, layout, selected, map);
         return viewport;
     }
@@ -423,13 +520,6 @@ internal static class StationLocationSheets
         using var data = new ResultBuffer(new TypedValue(1001, Tag),
             new TypedValue(1071, sheet.Number), new TypedValue(1071, sheet.Alternative), new TypedValue(1000, sheet.Layer));
         layout.XData = data;
-        layout.CreateExtensionDictionary();
-        var dictionary = (DBDictionary)tr.GetObject(layout.ExtensionDictionary, OpenMode.ForWrite);
-        var record = new Xrecord();
-        using var path = new ResultBuffer(new TypedValue(1, sheet.Template));
-        record.Data = path;
-        dictionary.SetAt(Tag, record);
-        tr.AddNewlyCreatedDBObject(record, true);
     }
 
     private static List<StationSheet> ReadSheets(Database db, Transaction tr)
@@ -442,11 +532,8 @@ internal static class StationLocationSheets
             using var data = layout.GetXDataForApplication(Tag);
             var values = data?.AsArray();
             if (values?.Length != 4) continue;
-            var extension = (DBDictionary)tr.GetObject(layout.ExtensionDictionary, OpenMode.ForRead);
-            var record = (Xrecord)tr.GetObject(extension.GetAt(Tag), OpenMode.ForRead);
-            using var path = record.Data;
             result.Add(new(layout.LayoutName, Convert.ToInt32(values[1].Value, CultureInfo.InvariantCulture),
-                Convert.ToInt32(values[2].Value, CultureInfo.InvariantCulture), (string)values[3].Value, (string)path.AsArray()[0].Value));
+                Convert.ToInt32(values[2].Value, CultureInfo.InvariantCulture), (string)values[3].Value));
         }
         return result;
     }
@@ -461,27 +548,6 @@ internal static class StationLocationSheets
         var cloned = selected.Select(entity => entity.ObjectId).ToHashSet();
         var ids = sourceOrder.GetFullDrawOrder(0).Cast<ObjectId>().Where(cloned.Contains).Select(id => map[id].Value);
         targetOrder.MoveToTop(new ObjectIdCollection(ids.ToArray()));
-    }
-
-    private static void RepairLogos(Transaction tr, Layout layout, string template, Document doc)
-    {
-        foreach (var image in Entities(tr, layout).OfType<RasterImage>())
-        {
-            var def = (RasterImageDef)tr.GetObject(image.ImageDefId, OpenMode.ForRead);
-            var file = def.SourceFileName;
-            if (string.IsNullOrWhiteSpace(file)) continue;
-            var besideTemplate = Path.GetFullPath(file, Path.GetDirectoryName(template)!);
-            var sharedLogo = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                "Techbase", "Techbase - Documenten", "Tekenkamer", "Autocad", "Logo's", Path.GetFileName(file));
-            var found = File.Exists(besideTemplate) ? besideTemplate : File.Exists(sharedLogo) ? sharedLogo : null;
-            if (found == null) doc.Editor.WriteMessage($"\nLogo niet gevonden: {Path.GetFileName(file)}");
-            else if (!string.Equals(found, file, StringComparison.OrdinalIgnoreCase))
-            {
-                if (!def.IsWriteEnabled) def.UpgradeOpen();
-                def.SourceFileName = found;
-                def.Load();
-            }
-        }
     }
 
     private static void WriteFields(Database db, Transaction tr, Layout layout, StationFields fields)
@@ -500,7 +566,9 @@ internal static class StationLocationSheets
             if (!oldPhoto.IsWriteEnabled) oldPhoto.UpgradeOpen();
             oldPhoto.Erase();
         }
-        if (!string.IsNullOrWhiteSpace(path)) AttachPhoto(db, tr, layout, path);
+        if (string.IsNullOrWhiteSpace(path)) return;
+        AttachPhoto(db, tr, layout, path);
+        RememberPhotoFolder(db, tr, path);
     }
 
     private static void ClearRevisions(Database db, Transaction tr, Layout layout)

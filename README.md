@@ -9,18 +9,21 @@ Download `Stationslocaties-AutoCAD.zip` uit deze repo, pak het bestand uit, slui
 ## Locaties maken
 
 1. Open een project-DWG met de gewenste achtergrond in modelruimte en werk in meters.
-2. Kies **Locatie plaatsen**. Selecteer bij het eerste gebruik een voorbeeld-DWG met de layouts `Trafo 1 VL` en `Totaal`, het blok `Onderhoek Spitters` en het trafoblok `TRAFO` uit het oorspronkelijke sjabloon. Deze repo levert de project-DWG en kaartachtergronden niet mee.
+2. Kies **Locatie plaatsen**. De plug-in bevat een leeg A3-sjabloon, de onderhoek, het fotovak en het trafoblok.
 3. Vul de projectgegevens in, kies het trafonummer en VL of AL en prik het midden en de draairichting. De plug-in maakt een detailblad op 1:250 en werkt Totaal bij.
-4. Voeg de alternatieve locaties toe. Elk detailblad toont de eigen trafolocatie. Totaal toont alle locaties.
+4. Laat **Adres / locatie** leeg om met PDOK het dichtstbijzijnde BAG-adres binnen 1 km in te vullen. De optie gebruikt het aangeklikte punt in RD New (EPSG:28992) en kan per plaatsing worden uitgezet. Een handmatig opgegeven adres krijgt voorrang. Bij een onbereikbare dienst kun je de locatie gewoon plaatsen.
+5. Voeg de alternatieve locaties toe. Elk detailblad toont de eigen trafolocatie. Totaal toont alle locaties.
 
 ## Bestaande bladen bijwerken
 
 - Open **Alle bladen bewerken** voor de tabel met Totaal en alle VL- en AL-bladen. Wijzig datums, adressen, opmerkingen, tekeningnummers en fotopaden in één sessie. Dubbelklik in een fotocel om een bestand te kiezen. Maak de fotocel leeg om de foto te verwijderen.
 - Gebruik **Vandaag voor alle bladen** om alle datums in de tabel te vullen. De wijzigingen worden pas toegepast met **Opslaan**.
-- Gebruik **Projectgegevens** voor gedeelde velden zoals de projectnaam, gemeente en tekenaarsinitialen. Deze worden in alle gegenereerde onderhoeken bijgewerkt.
+- Projectnaam, deelgebied, gemeente, beide projectnummers en tekenaarsinitialen worden uit bestaande onderhoeken ingevuld. Sla een wijziging op vanuit **Geselecteerd blad** of **Projectgegevens** om de gedeelde waarden in alle onderhoeken bij te werken.
+- De laatst gebruikte fotomap wordt bij het opslaan in de project-DWG onthouden. De fotokiezer opent die map bij de volgende locatie.
+- Gebruik **PDOK** naast **Adres / locatie** in **Geselecteerd blad** om het adres van een bestaande locatie opnieuw op te zoeken.
 - Via **Geselecteerd blad** kun je één locatie bewerken of de kaart opnieuw centreren na het verplaatsen van een blok.
 
-Foto’s en logo’s blijven rasterreferenties. De projectgegevens blijven in de DWG. Gebruik bij overdracht ook de bijbehorende referentiebestanden.
+Locatiefoto’s blijven rasterreferenties. Neem ze mee bij overdracht van de DWG. Het ingebouwde sjabloon bevat de A3-indeling en de vectoronderdelen. Projectfoto’s, logo’s en kaartachtergronden komen uit het eigen project.
 
 ## Bouwen
 
