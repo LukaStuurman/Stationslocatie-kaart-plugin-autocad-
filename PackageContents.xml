@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0" AutodeskProduct="AutoCAD" Name="Stationlocaties"
+  Description="Zelfstandige stationlocatiekaarten" AppVersion="1.0.0"
+  ProductCode="{70642627-170B-49AF-83A4-CB13C70DC199}" UpgradeCode="{FEAFC23B-1FE6-45AA-9E03-9F5B7870E5B3}">
+  <CompanyDetails Name="Techbase" />
+  <Components>
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.1" />
+    <ComponentEntry AppName="Stationslocaties.R25" ModuleName="./Contents/R25/Stationslocaties.dll"
+      AppType=".Net" LoadOnAutoCADStartup="False" LoadOnCommandInvocation="True">
+      <Commands GroupName="STATIONSLOCATIES"><Command Global="STATIONLOCATIES" Local="STATIONLOCATIES" /></Commands>
+    </ComponentEntry>
+  </Components>
+  <Components>
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R26.0" SeriesMax="R26.0" />
+    <ComponentEntry AppName="Stationslocaties.R26" ModuleName="./Contents/R26/Stationslocaties.dll"
+      AppType=".Net" LoadOnAutoCADStartup="False" LoadOnCommandInvocation="True">
+      <Commands GroupName="STATIONSLOCATIES"><Command Global="STATIONLOCATIES" Local="STATIONLOCATIES" /></Commands>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>

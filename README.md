@@ -4,7 +4,7 @@ Zelfstandige AutoCAD-plug-in voor het plaatsen van trafolocaties en het maken va
 
 ## Installatie
 
-Download `Stationslocaties-AutoCAD.zip` uit deze repo, pak het bestand uit, sluit AutoCAD en voer `Installeren.cmd` uit. Start AutoCAD 2025, 2026 of 2027 en voer `TBSTATIONLOCATIES` uit. Gebruik één installatie van dit commando. Als je Techbase Blocks 1.20.0 met Stationlocaties hebt geïnstalleerd, verwijder die versie of gebruik een installatie zonder dat commando.
+Download `Stationslocaties-AutoCAD.zip` uit deze repo, pak het bestand uit, sluit AutoCAD en voer `Installeren.cmd` uit. Start AutoCAD 2025, 2026 of 2027 en voer `STATIONLOCATIES` uit. Het eigen commando kan naast Techbase Blocks worden gebruikt.
 
 ## Locaties maken
 

@@ -1,0 +1,553 @@
+using System.Globalization;
+using System.IO;
+using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.Geometry;
+
+namespace Stationslocaties;
+
+internal sealed record StationSheet(string Name, int Number, int Alternative, string Layer, string Template);
+
+internal sealed record StationFields(string Project, string Area, string Municipality, string ProjectNumber,
+    string ClientNumber, string Drafter, string Date, string Address, string Notes, string DrawingNumber, string Photo)
+{
+    internal static string Today => DateTime.Today.ToString("d-M-yyyy", CultureInfo.InvariantCulture);
+    internal static StationFields Empty => new("", "", "", "", "", "", Today, "", "", "", "");
+
+    internal Dictionary<string, string> Attributes() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["PROJECTNAAM"] = Project, ["DEELGEBIED"] = Area, ["GEMEENTE"] = Municipality,
+        ["PROJECTNR.CIRCET"] = ProjectNumber, ["PROJECTNR.OPDR."] = ClientNumber, ["GET"] = Drafter, ["TDD"] = Date,
+        ["OVERIGE1"] = Notes, ["OVERIGE2"] = Address, ["TEKENINGNUMMER"] = DrawingNumber,
+        ["FORMAAT"] = "A3", ["SCHAAL"] = "1:250", ["TYPE_TEKENING"] = "Trafo locatie"
+    };
+}
+
+internal static class StationLocationSheets
+{
+    internal const string TemplateLayout = "Trafo 1 VL";
+    internal const string OverviewName = "Totaal";
+    private const string Tag = "TECHBASE_STATIONBLAD";
+    private const string Symbol = "TB_STATION_TRAFO";
+    private const string PhotoLayer = "TB_STATION_FOTO";
+    private const string OverviewLayer = "TB_STATION_OVERZICHT";
+    private const string SourcePhotoLayer = "Wipout 2";
+    private const string TitleBlock = "Onderhoek Spitters";
+
+    internal static List<StationSheet> List(Database db)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        return ReadSheets(db, tr).OrderBy(sheet => sheet.Number).ThenBy(sheet => sheet.Alternative).ToList();
+    }
+
+    internal static StationSheet Next(Database db, int number, bool preferred, string template)
+    {
+        var sameStation = List(db).Where(sheet => sheet.Number == number).ToArray();
+        if (preferred && sameStation.Any(sheet => sheet.Alternative == 0))
+            throw new InvalidOperationException($"Trafo {number} heeft al een voorkeurslocatie.");
+        var alternative = preferred ? 0 : sameStation.Select(sheet => sheet.Alternative).DefaultIfEmpty().Max() + 1;
+        var suffix = alternative switch { 0 => "VL", 1 => "AL", _ => "AL" + alternative };
+        return new($"Trafo {number} {suffix}", number, alternative, "TB_STATION_" + number + "_" + suffix, template);
+    }
+
+    internal static string DefaultDrawingNumber(StationSheet sheet) =>
+        $"{sheet.Number} - " + (sheet.Alternative == 0 ? "Voorkeurslocatie"
+            : "Alternatieve locatie" + (sheet.Alternative > 1 ? " " + sheet.Alternative : ""));
+
+    internal static StationFields ReadFields(Database db, StationSheet sheet)
+        => ReadFields(db, sheet.Name);
+
+    internal static StationFields ProjectFields(Database db)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        return HasOverview(db, tr) ? ReadFields(db, OverviewName) : StationFields.Empty;
+    }
+
+    private static StationFields ReadFields(Database db, string name)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        var layout = GetLayout(db, tr, name);
+        var values = Title(tr, layout).AttributeCollection.Cast<ObjectId>()
+            .Select(id => (AttributeReference)tr.GetObject(id, OpenMode.ForRead))
+            .ToDictionary(a => a.Tag, a => a.TextString, StringComparer.OrdinalIgnoreCase);
+        string Field(string key) => values.GetValueOrDefault(key, "");
+        var photo = Entities(tr, layout).OfType<RasterImage>().FirstOrDefault(image => image.Layer == PhotoLayer);
+        var path = photo == null ? "" : ((RasterImageDef)tr.GetObject(photo.ImageDefId, OpenMode.ForRead)).SourceFileName;
+        return new(Field("PROJECTNAAM"), Field("DEELGEBIED"), Field("GEMEENTE"), Field("PROJECTNR.CIRCET"),
+            Field("PROJECTNR.OPDR."), Field("GET"), Field("TDD"), Field("OVERIGE2"), Field("OVERIGE1"), Field("TEKENINGNUMMER"), path);
+    }
+
+    internal static void Create(Document doc, StationSheet sheet, StationFields fields, Point3d point, double rotation)
+    {
+        var db = doc.Database;
+        if (db.Insunits is not (UnitsValue.Meters or UnitsValue.Undefined))
+            throw new InvalidOperationException("Deze kaart gebruikt modelcoördinaten in meters. Controleer INSUNITS.");
+        var layouts = LayoutManager.Current;
+        if (layouts.LayoutExists(sheet.Name))
+            throw new InvalidOperationException($"Layout ‘{sheet.Name}’ bestaat al.");
+        bool newOverview;
+        using (var check = db.TransactionManager.StartTransaction())
+        {
+            newOverview = !HasOverview(db, check);
+            if (newOverview && layouts.LayoutExists(OverviewName))
+                throw new InvalidOperationException("Er bestaat al een layout ‘Totaal’. Hernoem die om een nieuw overzicht te kunnen maken.");
+            if (ModelBlocks(db, check).Any(block => BlockName(check, block).Equals("TRAFO", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("De modelruimte bevat al losse TRAFO-blokken. Gebruik een projecttekening met alleen de achtergrondkaarten voor deze werkstroom.");
+        }
+
+        using var source = new Database(false, true);
+        source.ReadDwgFile(sheet.Template, FileOpenMode.OpenForReadAndAllShare, true, null);
+        source.CloseInput(true);
+        using var sourceTr = source.TransactionManager.StartTransaction();
+        var sample = GetLayout(source, sourceTr, TemplateLayout);
+        var overviewSample = newOverview ? GetLayout(source, sourceTr, OverviewName) : null;
+        var overviewCreated = false;
+        layouts.CreateLayout(sheet.Name);
+        try
+        {
+            if (newOverview)
+            {
+                layouts.CreateLayout(OverviewName);
+                overviewCreated = true;
+            }
+            using var tr = db.TransactionManager.StartTransaction();
+            var layout = GetLayout(db, tr, sheet.Name, OpenMode.ForWrite);
+            var viewport = CloneSheet(doc, tr, source, sourceTr, sample, layout, sheet.Template);
+            if (overviewSample != null)
+            {
+                var overview = GetLayout(db, tr, OverviewName, OpenMode.ForWrite);
+                CloneSheet(doc, tr, source, sourceTr, overviewSample, overview, sheet.Template);
+                overview.CreateExtensionDictionary();
+                var dictionary = (DBDictionary)tr.GetObject(overview.ExtensionDictionary, OpenMode.ForWrite);
+                var marker = new Xrecord();
+                dictionary.SetAt(Tag, marker);
+                tr.AddNewlyCreatedDBObject(marker, true);
+                SetAttributes(db, tr, overview, (fields with { Date = StationFields.Today }).Attributes());
+                SetAttributes(db, tr, overview, new Dictionary<string, string>
+                {
+                    ["OVERIGE1"] = "", ["OVERIGE2"] = "",
+                    ["TEKENINGNUMMER"] = string.IsNullOrWhiteSpace(fields.Area) ? "Trafo-overzicht" : "Overzicht " + fields.Area
+                });
+                ClearRevisions(db, tr, overview);
+            }
+
+            var layerId = Layer(db, tr, sheet.Layer, true);
+            var blockId = ImportSymbol(db, tr, source, sourceTr);
+            var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            var reference = new BlockReference(point, blockId) { LayerId = layerId, Rotation = rotation };
+            model.AppendEntity(reference);
+            tr.AddNewlyCreatedDBObject(reference, true);
+            WriteMetadata(db, tr, layout, sheet);
+            Center(viewport, point);
+            ClearRevisions(db, tr, layout);
+            WriteFields(db, tr, layout, fields);
+            RefreshOverview(db, tr);
+            tr.Commit();
+        }
+        catch
+        {
+            if (overviewCreated) layouts.DeleteLayout(OverviewName);
+            layouts.DeleteLayout(sheet.Name);
+            throw;
+        }
+    }
+
+    internal static void Edit(Document doc, StationSheet sheet, StationFields fields)
+    {
+        var db = doc.Database;
+        using var tr = db.TransactionManager.StartTransaction();
+        var layout = GetLayout(db, tr, sheet.Name);
+        Center(MapViewport(tr, layout), LocationBlock(tr, ModelBlocks(db, tr), sheet).Position);
+        WriteFields(db, tr, layout, fields);
+        RefreshOverview(db, tr);
+        tr.Commit();
+    }
+
+    internal static IReadOnlyList<SheetRow> ReadSheetRows(Database db, IReadOnlyList<StationSheet> sheets)
+    {
+        var rows = new List<SheetRow> { new(OverviewName, true, ProjectFields(db)) };
+        rows.AddRange(sheets.Select(sheet => new SheetRow(sheet.Name, false, ReadFields(db, sheet))));
+        return rows;
+    }
+
+    internal static void UpdateSheetRows(Database db, IReadOnlyList<SheetRow> rows)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        foreach (var row in rows)
+        {
+            var layout = GetLayout(db, tr, row.Name);
+            var fields = row.Fields;
+            SetAttributes(db, tr, layout, new Dictionary<string, string>
+            {
+                ["TDD"] = fields.Date, ["OVERIGE2"] = fields.Address,
+                ["OVERIGE1"] = fields.Notes, ["TEKENINGNUMMER"] = fields.DrawingNumber
+            });
+            if (!row.Overview) SetPhoto(db, tr, layout, fields.Photo);
+        }
+        tr.Commit();
+    }
+
+    internal static void UpdateProject(Database db, StationFields fields)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        if (!HasOverview(db, tr)) throw new InvalidOperationException("Plaats eerst een locatie om het project te starten.");
+        var shared = new Dictionary<string, string>
+        {
+            ["PROJECTNAAM"] = fields.Project, ["DEELGEBIED"] = fields.Area, ["GEMEENTE"] = fields.Municipality,
+            ["PROJECTNR.CIRCET"] = fields.ProjectNumber, ["PROJECTNR.OPDR."] = fields.ClientNumber, ["GET"] = fields.Drafter
+        };
+        foreach (var sheet in ReadSheets(db, tr)) SetAttributes(db, tr, GetLayout(db, tr, sheet.Name), shared);
+        var overview = GetLayout(db, tr, OverviewName);
+        SetAttributes(db, tr, overview, shared);
+        SetAttributes(db, tr, overview, new Dictionary<string, string>
+        {
+            ["TDD"] = fields.Date, ["TEKENINGNUMMER"] = fields.DrawingNumber,
+            ["OVERIGE2"] = fields.Address, ["OVERIGE1"] = fields.Notes
+        });
+        RefreshOverview(db, tr);
+        tr.Commit();
+    }
+
+    private static bool HasOverview(Database db, Transaction tr)
+    {
+        var layouts = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+        if (!layouts.Contains(OverviewName)) return false;
+        var layout = (Layout)tr.GetObject(layouts.GetAt(OverviewName), OpenMode.ForRead);
+        return !layout.ExtensionDictionary.IsNull &&
+            ((DBDictionary)tr.GetObject(layout.ExtensionDictionary, OpenMode.ForRead)).Contains(Tag);
+    }
+
+    private static BlockReference[] ModelBlocks(Database db, Transaction tr) =>
+        ((BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead))
+        .Cast<ObjectId>().Select(id => tr.GetObject(id, OpenMode.ForRead)).OfType<BlockReference>().ToArray();
+
+    private static BlockReference LocationBlock(Transaction tr, BlockReference[] blocks, StationSheet sheet)
+    {
+        var matches = blocks.Where(block => block.Layer == sheet.Layer && BlockName(tr, block) == Symbol).Take(2).ToArray();
+        if (matches.Length != 1)
+            throw new InvalidOperationException($"Verwacht één trafo-blok op laag ‘{sheet.Layer}’. Gevonden: {matches.Length}.");
+        return matches[0];
+    }
+
+    private static Viewport CloneSheet(Document doc, Transaction tr, Database source, Transaction sourceTr,
+        Layout sample, Layout layout, string template)
+    {
+        var sampleViewport = MapViewport(sourceTr, sample);
+        var paperViewport = PaperViewport(sample);
+        var selected = Entities(sourceTr, sample).Where(entity =>
+            (entity is not Viewport || entity.ObjectId == sampleViewport.ObjectId) &&
+            entity.ObjectId != paperViewport &&
+            (entity is not RasterImage || entity.Layer != SourcePhotoLayer)).ToArray();
+        _ = Title(sourceTr, sample);
+        using var settings = new PlotSettings(false);
+        settings.CopyFrom(sample);
+        layout.CopyFrom(settings);
+        var map = new IdMapping();
+        source.WblockCloneObjects(new ObjectIdCollection(selected.Select(entity => entity.ObjectId).ToArray()),
+            layout.BlockTableRecordId, map, DuplicateRecordCloning.Ignore, false);
+        var viewport = (Viewport)tr.GetObject(map[sampleViewport.ObjectId].Value, OpenMode.ForWrite);
+        if (sampleViewport.NonRectClipOn)
+        {
+            viewport.NonRectClipEntityId = map[sampleViewport.NonRectClipEntityId].Value;
+            viewport.NonRectClipOn = true;
+        }
+        RepairLogos(tr, layout, template, doc);
+        PreserveDrawOrder(sourceTr, sample, tr, layout, selected, map);
+        return viewport;
+    }
+
+    private static Layout GetLayout(Database db, Transaction tr, string name, OpenMode mode = OpenMode.ForRead)
+    {
+        var dictionary = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+        if (!dictionary.Contains(name)) throw new InvalidOperationException($"Layout ‘{name}’ ontbreekt in de tekening.");
+        return (Layout)tr.GetObject(dictionary.GetAt(name), mode);
+    }
+
+    private static IEnumerable<Entity> Entities(Transaction tr, Layout layout) =>
+        ((BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead)).Cast<ObjectId>()
+        .Select(id => tr.GetObject(id, OpenMode.ForRead)).OfType<Entity>();
+
+    private static ObjectId PaperViewport(Layout layout)
+    {
+        var ids = layout.GetViewports();
+        return ids.Count == 0 ? ObjectId.Null : ids[0];
+    }
+
+    private static Viewport MapViewport(Transaction tr, Layout layout)
+    {
+        var paper = PaperViewport(layout);
+        var viewports = Entities(tr, layout).OfType<Viewport>();
+        var map = layout.LayoutName == OverviewName
+            ? viewports.SingleOrDefault(vp => vp.ObjectId != paper && vp.Width > 400 && vp.Width < 425)
+            : viewports.SingleOrDefault(vp => vp.NonRectClipOn);
+        return map ?? throw new InvalidOperationException($"Layout ‘{layout.LayoutName}’ mist het kaartvenster.");
+    }
+
+    private static string BlockName(Transaction tr, BlockReference block) =>
+        ((BlockTableRecord)tr.GetObject(block.IsDynamicBlock ? block.DynamicBlockTableRecord : block.BlockTableRecord, OpenMode.ForRead)).Name;
+
+    private static BlockReference Title(Transaction tr, Layout layout) =>
+        Entities(tr, layout).OfType<BlockReference>().SingleOrDefault(block => BlockName(tr, block) == TitleBlock)
+        ?? throw new InvalidOperationException($"Layout ‘{layout.LayoutName}’ mist ‘{TitleBlock}’.");
+
+    private static ObjectId ImportSymbol(Database db, Transaction tr, Database source, Transaction sourceTr)
+    {
+        var destination = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+        if (destination.Has(Symbol)) return destination[Symbol];
+        var blocks = (BlockTable)sourceTr.GetObject(source.BlockTableId, OpenMode.ForRead);
+        if (!blocks.Has("TRAFO")) throw new InvalidOperationException("Het TRAFO-blok ontbreekt in het sjabloon.");
+        var original = (BlockTableRecord)sourceTr.GetObject(blocks["TRAFO"], OpenMode.ForWrite);
+        var outline = original.Cast<ObjectId>().Select(id => sourceTr.GetObject(id, OpenMode.ForRead))
+            .OfType<Polyline>().SingleOrDefault(line => line.Layer.Equals("MSR~Gepr_Lin35", StringComparison.OrdinalIgnoreCase)
+                && line.NumberOfVertices >= 4)
+            ?? throw new InvalidOperationException("De kastcontour ontbreekt in het TRAFO-blok van het sjabloon.");
+        var bounds = outline.GeometricExtents;
+        var center = bounds.MinPoint + (bounds.MaxPoint - bounds.MinPoint) * 0.5;
+        original.Name = Symbol + "_BRON";
+        var map = new IdMapping();
+        source.WblockCloneObjects(new ObjectIdCollection(new[] { original.ObjectId }), db.BlockTableId,
+            map, DuplicateRecordCloning.Ignore, false);
+        // A nested reference retains the source dimensions and makes the cabinet centre the placement point.
+        if (!destination.IsWriteEnabled) destination.UpgradeOpen();
+        var centered = new BlockTableRecord { Name = Symbol };
+        var id = destination.Add(centered);
+        tr.AddNewlyCreatedDBObject(centered, true);
+        var insert = new BlockReference(Point3d.Origin - (center - original.Origin), map[original.ObjectId].Value);
+        centered.AppendEntity(insert);
+        tr.AddNewlyCreatedDBObject(insert, true);
+        return id;
+    }
+
+    private static ObjectId Layer(Database db, Transaction tr, string name, bool location = false)
+    {
+        var table = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        if (table.Has(name))
+        {
+            if (location) throw new InvalidOperationException($"Laag ‘{name}’ bestaat al.");
+            return table[name];
+        }
+        if (!table.IsWriteEnabled) table.UpgradeOpen();
+        var layer = new LayerTableRecord { Name = name };
+        var id = table.Add(layer);
+        tr.AddNewlyCreatedDBObject(layer, true);
+        return id;
+    }
+
+    private static void Center(Viewport viewport, Point3d point, int denominator = 250)
+    {
+        if (!viewport.IsWriteEnabled) viewport.UpgradeOpen();
+        viewport.Locked = false;
+        viewport.ViewDirection = Vector3d.ZAxis;
+        viewport.TwistAngle = 0;
+        viewport.ViewTarget = point;
+        viewport.ViewCenter = Point2d.Origin;
+        viewport.ViewHeight = viewport.Height * denominator / 1000.0;
+        viewport.On = true;
+        viewport.Locked = true;
+    }
+
+    private static void Isolate(Database db, Transaction tr)
+    {
+        var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        var locations = layers.Cast<ObjectId>().Where(id =>
+        {
+            var name = ((LayerTableRecord)tr.GetObject(id, OpenMode.ForRead)).Name;
+            return name.StartsWith("TB_STATION_", StringComparison.OrdinalIgnoreCase) && name != PhotoLayer;
+        }).ToArray();
+        foreach (var sheet in ReadSheets(db, tr))
+        {
+            var own = layers[sheet.Layer];
+            var viewport = MapViewport(tr, GetLayout(db, tr, sheet.Name));
+            if (!viewport.IsWriteEnabled) viewport.UpgradeOpen();
+            viewport.ThawLayersInViewport(new ObjectIdCollection(new[] { own }).GetEnumerator());
+            viewport.FreezeLayersInViewport(new ObjectIdCollection(locations.Where(id => id != own).ToArray()).GetEnumerator());
+        }
+    }
+
+    private static void RefreshOverview(Database db, Transaction tr)
+    {
+        var sheets = ReadSheets(db, tr);
+        if (sheets.Count == 0 || !HasOverview(db, tr)) return;
+        var blocks = ModelBlocks(db, tr);
+        var locations = sheets.Select(sheet => (Sheet: sheet, Position: LocationBlock(tr, blocks, sheet).Position)).ToArray();
+        var layout = GetLayout(db, tr, OverviewName);
+        var viewport = MapViewport(tr, layout);
+        const double margin = 35;
+        var left = locations.Min(location => location.Position.X) - margin;
+        var right = locations.Max(location => location.Position.X) + margin + 45;
+        var bottom = locations.Min(location => location.Position.Y) - margin;
+        var top = locations.Max(location => location.Position.Y) + margin;
+        var needed = Math.Max((right - left) / viewport.Width, (top - bottom) / viewport.Height) * 1000;
+        var step = needed <= 1000 ? 250 : needed <= 5000 ? 500 : 1000;
+        var scale = Math.Max(500, (int)Math.Ceiling(needed / step) * step);
+        Center(viewport, new Point3d((left + right) / 2, (bottom + top) / 2, 0), scale);
+        var overviewLayer = Layer(db, tr, OverviewLayer);
+        var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        var visible = sheets.Select(sheet => layers[sheet.Layer]).Append(overviewLayer);
+        viewport.ThawLayersInViewport(new ObjectIdCollection(visible.ToArray()).GetEnumerator());
+        SetAttributes(db, tr, layout, new Dictionary<string, string> { ["SCHAAL"] = "1:" + scale });
+
+        var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        foreach (var id in model.Cast<ObjectId>().ToArray())
+            if (tr.GetObject(id, OpenMode.ForRead) is Entity entity && entity.LayerId == overviewLayer)
+            {
+                if (!entity.IsWriteEnabled) entity.UpgradeOpen();
+                entity.Erase();
+            }
+        foreach (var location in locations)
+        {
+            var p = location.Position;
+            var height = scale * 0.003;
+            var label = new MText { Location = p + new Vector3d(height * 3, height, 0), TextHeight = height,
+                Contents = location.Sheet.Name, LayerId = overviewLayer, Attachment = AttachmentPoint.MiddleLeft };
+            model.AppendEntity(label);
+            tr.AddNewlyCreatedDBObject(label, true);
+            var circle = new Circle(p, Vector3d.ZAxis, height * 2.3) { LayerId = overviewLayer };
+            model.AppendEntity(circle);
+            tr.AddNewlyCreatedDBObject(circle, true);
+        }
+        // The overview layer is first created here, so refresh visibility after adding it.
+        Isolate(db, tr);
+    }
+
+    private static void WriteMetadata(Database db, Transaction tr, Layout layout, StationSheet sheet)
+    {
+        var apps = (RegAppTable)tr.GetObject(db.RegAppTableId, OpenMode.ForRead);
+        if (!apps.Has(Tag))
+        {
+            if (!apps.IsWriteEnabled) apps.UpgradeOpen();
+            var app = new RegAppTableRecord { Name = Tag };
+            apps.Add(app);
+            tr.AddNewlyCreatedDBObject(app, true);
+        }
+        using var data = new ResultBuffer(new TypedValue(1001, Tag),
+            new TypedValue(1071, sheet.Number), new TypedValue(1071, sheet.Alternative), new TypedValue(1000, sheet.Layer));
+        layout.XData = data;
+        layout.CreateExtensionDictionary();
+        var dictionary = (DBDictionary)tr.GetObject(layout.ExtensionDictionary, OpenMode.ForWrite);
+        var record = new Xrecord();
+        using var path = new ResultBuffer(new TypedValue(1, sheet.Template));
+        record.Data = path;
+        dictionary.SetAt(Tag, record);
+        tr.AddNewlyCreatedDBObject(record, true);
+    }
+
+    private static List<StationSheet> ReadSheets(Database db, Transaction tr)
+    {
+        var result = new List<StationSheet>();
+        var dictionary = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+        foreach (var entry in dictionary)
+        {
+            var layout = (Layout)tr.GetObject(entry.Value, OpenMode.ForRead);
+            using var data = layout.GetXDataForApplication(Tag);
+            var values = data?.AsArray();
+            if (values?.Length != 4) continue;
+            var extension = (DBDictionary)tr.GetObject(layout.ExtensionDictionary, OpenMode.ForRead);
+            var record = (Xrecord)tr.GetObject(extension.GetAt(Tag), OpenMode.ForRead);
+            using var path = record.Data;
+            result.Add(new(layout.LayoutName, Convert.ToInt32(values[1].Value, CultureInfo.InvariantCulture),
+                Convert.ToInt32(values[2].Value, CultureInfo.InvariantCulture), (string)values[3].Value, (string)path.AsArray()[0].Value));
+        }
+        return result;
+    }
+
+    private static void PreserveDrawOrder(Transaction sourceTr, Layout sample, Transaction tr, Layout layout,
+        Entity[] selected, IdMapping map)
+    {
+        var sourceSpace = (BlockTableRecord)sourceTr.GetObject(sample.BlockTableRecordId, OpenMode.ForRead);
+        var targetSpace = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+        var sourceOrder = (DrawOrderTable)sourceTr.GetObject(sourceSpace.DrawOrderTableId, OpenMode.ForRead);
+        var targetOrder = (DrawOrderTable)tr.GetObject(targetSpace.DrawOrderTableId, OpenMode.ForWrite);
+        var cloned = selected.Select(entity => entity.ObjectId).ToHashSet();
+        var ids = sourceOrder.GetFullDrawOrder(0).Cast<ObjectId>().Where(cloned.Contains).Select(id => map[id].Value);
+        targetOrder.MoveToTop(new ObjectIdCollection(ids.ToArray()));
+    }
+
+    private static void RepairLogos(Transaction tr, Layout layout, string template, Document doc)
+    {
+        foreach (var image in Entities(tr, layout).OfType<RasterImage>())
+        {
+            var def = (RasterImageDef)tr.GetObject(image.ImageDefId, OpenMode.ForRead);
+            var file = def.SourceFileName;
+            if (string.IsNullOrWhiteSpace(file)) continue;
+            var besideTemplate = Path.GetFullPath(file, Path.GetDirectoryName(template)!);
+            var sharedLogo = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "Techbase", "Techbase - Documenten", "Tekenkamer", "Autocad", "Logo's", Path.GetFileName(file));
+            var found = File.Exists(besideTemplate) ? besideTemplate : File.Exists(sharedLogo) ? sharedLogo : null;
+            if (found == null) doc.Editor.WriteMessage($"\nLogo niet gevonden: {Path.GetFileName(file)}");
+            else if (!string.Equals(found, file, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!def.IsWriteEnabled) def.UpgradeOpen();
+                def.SourceFileName = found;
+                def.Load();
+            }
+        }
+    }
+
+    private static void WriteFields(Database db, Transaction tr, Layout layout, StationFields fields)
+    {
+        SetAttributes(db, tr, layout, fields.Attributes());
+        SetPhoto(db, tr, layout, fields.Photo);
+    }
+
+    private static void SetPhoto(Database db, Transaction tr, Layout layout, string path)
+    {
+        var oldPhoto = Entities(tr, layout).OfType<RasterImage>().FirstOrDefault(image => image.Layer == PhotoLayer);
+        if (oldPhoto != null)
+        {
+            var oldDef = (RasterImageDef)tr.GetObject(oldPhoto.ImageDefId, OpenMode.ForRead);
+            if (string.Equals(oldDef.SourceFileName, path, StringComparison.OrdinalIgnoreCase)) return;
+            if (!oldPhoto.IsWriteEnabled) oldPhoto.UpgradeOpen();
+            oldPhoto.Erase();
+        }
+        if (!string.IsNullOrWhiteSpace(path)) AttachPhoto(db, tr, layout, path);
+    }
+
+    private static void ClearRevisions(Database db, Transaction tr, Layout layout)
+    {
+        var values = new Dictionary<string, string>();
+        for (var revision = 1; revision <= 4; revision++)
+            foreach (var prefix in new[] { "WIJ-", "GET-", "OMSCHRIJVING-WIJZ-", "WIJZ-DAT-" })
+                values[prefix + revision] = "";
+        SetAttributes(db, tr, layout, values);
+    }
+
+    private static void SetAttributes(Database db, Transaction tr, Layout layout, Dictionary<string, string> values)
+    {
+        foreach (ObjectId id in Title(tr, layout).AttributeCollection)
+        {
+            var attribute = (AttributeReference)tr.GetObject(id, OpenMode.ForRead);
+            if (!values.TryGetValue(attribute.Tag, out var value)) continue;
+            if (!attribute.IsWriteEnabled) attribute.UpgradeOpen();
+            attribute.TextString = value;
+            attribute.AdjustAlignment(db);
+        }
+    }
+
+    private static void AttachPhoto(Database db, Transaction tr, Layout layout, string path)
+    {
+        var dictionaryId = RasterImageDef.GetImageDictionary(db);
+        if (dictionaryId.IsNull) dictionaryId = RasterImageDef.CreateImageDictionary(db);
+        var dictionary = (DBDictionary)tr.GetObject(dictionaryId, OpenMode.ForWrite);
+        var definition = new RasterImageDef { SourceFileName = path };
+        definition.Load();
+        var id = dictionary.SetAt("TB_FOTO_" + Guid.NewGuid().ToString("N"), definition);
+        tr.AddNewlyCreatedDBObject(definition, true);
+        var pixels = definition.Size;
+        const double width = 109.3, height = 74.28;
+        var scale = Math.Min(width / pixels.X, height / pixels.Y);
+        var w = pixels.X * scale;
+        var h = pixels.Y * scale;
+        var image = new RasterImage
+        {
+            ImageDefId = id, LayerId = Layer(db, tr, PhotoLayer), ShowImage = true,
+            Orientation = new CoordinateSystem3d(new Point3d(307.5 + (width - w) / 2, 219.53 + (height - h) / 2, 0),
+                new Vector3d(w, 0, 0), new Vector3d(0, h, 0))
+        };
+        var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForWrite);
+        space.AppendEntity(image);
+        tr.AddNewlyCreatedDBObject(image, true);
+        RasterImage.EnableReactors(true);
+        image.AssociateRasterDef(definition);
+    }
+}
