@@ -50,6 +50,8 @@ internal static class StationLocationSheets
     private const string CornerTableLayer = "STATIONLOCATIES_HOEKPUNTEN";
     private const string NoteLayerSuffix = "_KAARTOPMERKINGEN";
     internal const double MarkerRadius = 20;
+    private const string ClientLayer = "STATIONLOCATIES_OPDRACHTGEVER";
+    private const string ClientKey = "STATIONLOCATIES_OPDRACHTGEVER";
     private const string PhotoLayer = "TB_STATION_FOTO";
     private const string OverviewLayer = "TB_STATION_OVERZICHT";
     private const string PhotoFolderKey = "TB_STATION_FOTOMAP";
@@ -260,6 +262,7 @@ internal static class StationLocationSheets
             Center(tr, viewport, point);
             step = "onderhoek invullen";
             ClearRevisions(db, tr, layout);
+            if (ReadClient(db, tr) is { } client) WriteClient(db, tr, layout, client);
             SetAttributes(db, tr, layout, fields.Attributes());
             WriteSharedProject(db, tr, fields);
             step = "locatiefoto plaatsen";
@@ -337,6 +340,7 @@ internal static class StationLocationSheets
                 ["TEKENINGNUMMER"] = string.IsNullOrWhiteSpace(fields.Area) ? "Trafo-overzicht" : "Overzicht " + fields.Area
             });
             ClearRevisions(db, tr, overview);
+            if (ReadClient(db, tr) is { } client) WriteClient(db, tr, overview, client);
             RefreshMarkers(db, tr, updateOverview: true);
             tr.Commit();
         }
@@ -1132,6 +1136,106 @@ internal static class StationLocationSheets
         }
     }
 
+    internal static ClientProfile? ReadClient(Database db)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        return ReadClient(db, tr);
+    }
+
+    private static ClientProfile? ReadClient(Database db, Transaction tr)
+    {
+        var dictionary = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+        if (!dictionary.Contains(ClientKey)) return null;
+        var record = (Xrecord)tr.GetObject(dictionary.GetAt(ClientKey), OpenMode.ForRead);
+        using var data = record.Data;
+        var fields = data?.AsArray().Select(value => value.Value as string ?? "").ToArray();
+        return fields is { Length: 7 } && Guid.TryParse(fields[0], out var id)
+            ? new(id, fields[1], fields[2], fields[3], fields[4], fields[5], fields[6])
+            : null;
+    }
+
+    internal static void ApplyClient(Database db, ClientProfile? client)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        var dictionary = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForWrite);
+        if (client != null)
+        {
+            Xrecord record;
+            if (dictionary.Contains(ClientKey))
+                record = (Xrecord)tr.GetObject(dictionary.GetAt(ClientKey), OpenMode.ForWrite);
+            else
+            {
+                record = new Xrecord();
+                dictionary.SetAt(ClientKey, record);
+                tr.AddNewlyCreatedDBObject(record, true);
+            }
+            string[] fields = [client.Id.ToString(), client.Name, client.Address, client.Phone, client.Website, client.Email, client.Logo];
+            using var data = new ResultBuffer(fields.Select(field => new TypedValue(1, field)).ToArray());
+            record.Data = data;
+        }
+        else if (dictionary.Contains(ClientKey))
+            tr.GetObject(dictionary.Remove(ClientKey), OpenMode.ForWrite).Erase();
+
+        foreach (var sheet in ReadSheets(db, tr))
+            WriteClient(db, tr, GetLayout(db, tr, sheet.Name), client);
+        if (HasOverview(db, tr)) WriteClient(db, tr, GetLayout(db, tr, OverviewName), client);
+        tr.Commit();
+    }
+
+    private static void WriteClient(Database db, Transaction tr, Layout layout, ClientProfile? client)
+    {
+        var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        if (layers.Has(ClientLayer))
+        {
+            var oldLayer = layers[ClientLayer];
+            foreach (var entity in Entities(tr, layout).Where(entity => entity.LayerId == oldLayer).ToArray())
+            {
+                if (!entity.IsWriteEnabled) entity.UpgradeOpen();
+                entity.Erase();
+            }
+        }
+        if (client == null) return;
+
+        // Client panel under the revision box in the embedded title block.
+        const double left = 266.1;
+        const double width = 25.85;
+        var origin = Title(tr, layout).Position;
+        var layer = Layer(db, tr, ClientLayer);
+        var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForWrite);
+        void AddLine(string value, double y, double height)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            var text = new DBText();
+            text.SetDatabaseDefaults(db);
+            text.LayerId = layer;
+            text.TextString = value;
+            text.Height = height;
+            var extent = text.GeometricExtents.MaxPoint.X;
+            if (extent > width) text.Height *= width / extent;
+            text.Position = origin + new Vector3d(left, y, 0);
+            space.AppendEntity(text);
+            tr.AddNewlyCreatedDBObject(text, true);
+        }
+
+        var logo = ClientLibrary.LogoPath(client.Logo);
+        if (File.Exists(logo))
+        {
+            using var image = System.Drawing.Image.FromFile(logo);
+            var scale = Math.Min(width / image.Width, 8.2 / image.Height);
+            var logoWidth = image.Width * scale;
+            var logoHeight = image.Height * scale;
+            var frame = new PhotoFrame(origin.X + left + (width - logoWidth) / 2,
+                origin.Y + 23 - logoHeight / 2, logoWidth, logoHeight);
+            AttachPhoto(db, tr, layout, logo, logo, frame, ClientLayer);
+        }
+        else AddLine(client.Name, 22, 2.1);
+
+        AddLine(client.Address, 10.45, 1.4);
+        AddLine(client.Phone.Length == 0 ? "" : "T: " + client.Phone, 8.3, 1.4);
+        AddLine(client.Website.Length == 0 ? "" : "I: " + client.Website, 6.15, 1.4);
+        AddLine(client.Email.Length == 0 ? "" : "E: " + client.Email, 4, 1.4);
+    }
+
     private static void ClearRevisions(Database db, Transaction tr, Layout layout)
     {
         var values = new Dictionary<string, string>();
@@ -1181,7 +1285,7 @@ internal static class StationLocationSheets
         return width > available ? height * available / width : height;
     }
 
-    private static void AttachPhoto(Database db, Transaction tr, Layout layout, string source, string raster, PhotoFrame frame)
+    private static void AttachPhoto(Database db, Transaction tr, Layout layout, string source, string raster, PhotoFrame frame, string layer = PhotoLayer)
     {
         var dictionaryId = RasterImageDef.GetImageDictionary(db);
         if (dictionaryId.IsNull) dictionaryId = RasterImageDef.CreateImageDictionary(db);
@@ -1192,7 +1296,7 @@ internal static class StationLocationSheets
         tr.AddNewlyCreatedDBObject(definition, true);
         var image = new RasterImage
         {
-            ImageDefId = id, LayerId = Layer(db, tr, PhotoLayer), ShowImage = true,
+            ImageDefId = id, LayerId = Layer(db, tr, layer), ShowImage = true,
             Orientation = new CoordinateSystem3d(new Point3d(frame.Left, frame.Bottom, 0),
                 new Vector3d(frame.Width, 0, 0), new Vector3d(0, frame.Height, 0))
         };

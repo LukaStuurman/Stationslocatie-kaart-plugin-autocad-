@@ -98,6 +98,14 @@ public sealed class Plugin
                                 doc.Editor.Regen();
                             }
                         break;
+                    case StationLocationAction.Client:
+                        using (var clientDialog = new StationClientDialog(StationLocationSheets.ReadClient(doc.Database)))
+                            if (AcApp.ShowModalDialog(clientDialog) == DialogResult.OK)
+                            {
+                                StationLocationSheets.ApplyClient(doc.Database, clientDialog.Applied);
+                                doc.Editor.Regen();
+                            }
+                        break;
                     case StationLocationAction.Project:
                         using (var input = new StationFieldsDialog(StationLocationSheets.ProjectFields(doc.Database), project: true, showOverviewFields: hasOverview))
                             if (AcApp.ShowModalDialog(input) == DialogResult.OK)
@@ -188,7 +196,7 @@ public sealed class Plugin
     }
 }
 
-internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview, Plot, Note, Blocks }
+internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview, Plot, Note, Blocks, Client }
 
 internal sealed class StationLocationDialog : Form
 {
@@ -293,6 +301,7 @@ internal sealed class StationLocationDialog : Form
         var note = Add("Kaartopmerking plaatsen", StationLocationAction.Note, false);
         var delete = Add("Locatie verwijderen", StationLocationAction.Delete, false);
         Group("Project");
+        Add("Opdrachtgevers beheren", StationLocationAction.Client);
         Add("Trafoblokken beheren", StationLocationAction.Blocks);
         Add("Alle bladen bewerken", StationLocationAction.EditAll, sheets.Count > 0);
         Add("Projectgegevens", StationLocationAction.Project, sheets.Count > 0);
