@@ -19,10 +19,14 @@ internal sealed class StationReferenceDialog : Form
         ForeColor = StationTheme.Ink;
         var panel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown,
             WrapContents = false, Padding = new Padding(14) };
-        panel.Controls.Add(new Label { AutoSize = true, Text = "Maak een kaartreferentie rechtstreeks uit PDOK." });
-        panel.Controls.Add(new Label { AutoSize = true, Text = "Kies een DWG-bestandsnaam en wijs twee hoeken van het gebied aan." });
-        kind.Items.AddRange([MapKind.Percelen, MapKind.Topo]);
+        panel.Controls.Add(new Label { AutoSize = true, Text = "Maak een kaartreferentie uit PDOK of een uitgepakte KLIC-levering." });
+        var instructions = new Label { AutoSize = true, Text = "Kies een DWG-bestandsnaam en wijs twee hoeken van het gebied aan." };
+        panel.Controls.Add(instructions);
+        kind.Items.AddRange([MapKind.Percelen, MapKind.Topo, MapKind.KLIC]);
         kind.SelectedIndex = 0;
+        kind.SelectedIndexChanged += (_, _) => instructions.Text = Kind == MapKind.KLIC
+            ? "Kies de map van de KLIC-levering en een DWG-bestandsnaam."
+            : "Kies een DWG-bestandsnaam en wijs twee hoeken van het gebied aan.";
         panel.Controls.Add(kind);
         var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
         var create = new Button { Text = "Xref-DWG maken", AutoSize = true, DialogResult = DialogResult.OK };

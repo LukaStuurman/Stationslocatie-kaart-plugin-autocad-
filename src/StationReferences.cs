@@ -6,20 +6,20 @@ using AcApp = Autodesk.AutoCAD.ApplicationServices.Core.Application;
 
 namespace Stationslocaties;
 
-internal enum MapKind { Percelen, Topo }
+internal enum MapKind { Percelen, Topo, KLIC }
 
 internal static class StationReferences
 {
-    private sealed record Request(string Path, ParcelArea Area, MapKind Kind);
+    private sealed record Request(string Path, ParcelArea Area, MapKind Kind, string? KlicFolder);
     private sealed record Download(Request Request, Task<Func<Database, string>> Task, CancellationTokenSource Cancellation);
     private static readonly Dictionary<Document, Request> queued = new();
     private static readonly Dictionary<Document, Download> downloading = new();
 
-    internal static void QueueCreate(Document host, string path, ParcelArea area, MapKind kind)
+    internal static void QueueCreate(Document host, string path, ParcelArea area, MapKind kind, string? klicFolder = null)
     {
         if (queued.ContainsKey(host) || downloading.ContainsKey(host))
             throw new InvalidOperationException("Voor deze tekening wordt al een kaart opgehaald.");
-        queued.Add(host, new(path, area, kind));
+        queued.Add(host, new(path, area, kind, klicFolder));
         host.SendStringToExecute("STATIONXREFSTART\n", true, false, false);
     }
 
@@ -30,7 +30,9 @@ internal static class StationReferences
         if (File.Exists(request.Path))
             throw new IOException("Deze Xref-DWG bestaat al. Kies een nieuwe bestandsnaam.");
 
-        host.Editor.WriteMessage("\nPDOK wordt op de achtergrond opgehaald. Je kunt intussen verder tekenen.\n");
+        host.Editor.WriteMessage(request.Kind == MapKind.KLIC
+            ? "\nKLIC-levering wordt op de achtergrond ingelezen.\n"
+            : "\nPDOK wordt op de achtergrond opgehaald. Je kunt intussen verder tekenen.\n");
         var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         var token = cancellation.Token;
         var task = Task.Run(() => PrepareMap(request, token), token);
@@ -63,6 +65,17 @@ internal static class StationReferences
 
     private static Func<Database, string> PrepareMap(Request request, CancellationToken cancellation)
     {
+        if (request.Kind == MapKind.KLIC)
+        {
+            var klic = StationKlic.ReadFolder(request.KlicFolder!, cancellation);
+            return drawing =>
+            {
+                var summary = StationKlic.Write(drawing, klic);
+                if (klic.Unmatched.Count > 0)
+                    summary += ". Zonder tekenregel: " + string.Join(", ", klic.Unmatched.Select(item => $"{item.Key} ({item.Value})"));
+                return summary;
+            };
+        }
         if (request.Kind == MapKind.Topo)
         {
             var topo = StationTopo.Download(request.Area, cancellation);
@@ -88,8 +101,9 @@ internal static class StationReferences
         var temporary = Path.Combine(Path.GetDirectoryName(path)!, "." + Guid.NewGuid().ToString("N") + ".dwg");
         try
         {
-            using (var drawing = new Database(true, true))
+            using (var drawing = new Database(request.Kind != MapKind.KLIC, true))
             {
+                if (request.Kind == MapKind.KLIC) StationKlic.LoadStyles(drawing);
                 drawing.Insunits = UnitsValue.Meters;
                 summary = write(drawing);
                 drawing.SaveAs(temporary, DwgVersion.Current);

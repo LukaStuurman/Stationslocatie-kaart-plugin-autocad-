@@ -36,6 +36,12 @@ Gebruik **Bladeren** of **Plakken** bij de locatiefoto. De foto vult het vaste v
 
 Kies **Bladen plotten**, vink de gewenste layouts aan en stel de PDF-plotter, het papierformaat, de plotstijl, de afdrukstand, de schaal en de uitvoermap één keer in. Elk blad krijgt een afzonderlijke PDF met de layoutnaam. Bij een bestaande bestandsnaam krijgt de nieuwe PDF een volgnummer. Lijndiktes staan standaard uit. Vink **Lijndiktes plotten** aan om ook een plotstijltabel te kunnen kiezen.
 
+## KLIC-kaartreferentie
+
+Kies **Kaartreferenties maken → KLIC → Xref-DWG maken** en selecteer de map van één uitgepakte KLIC-levering. De plug-in leest de gebiedsinformatielevering en koppelt de gemaakte DWG als XREF op RD-coördinaten. Een voorbeeld-DWG is tijdens het importeren niet nodig.
+
+De tekenregels zijn afgeleid van een InfraCAD-referentie en gebruiken de daarin aangetroffen NLCS-lagen, lijnpatronen en blokdefinities. Voor de weergave van de complexe lijntypen en de NLCS-tekststijl moet AutoCAD `NLCS.SHX` en `NLCS-ISO.ttf` kunnen vinden. Het AutoCAD-opdrachtvenster meldt objecten waarvoor geen tekenregel beschikbaar is.
+
 ## Bouwen
 
 Gebruik Windows en een .NET 10 SDK. Voer `Build.ps1` uit om de AutoCAD-bundle en het installatiearchief opnieuw op te bouwen. De API-referenties komen uit het NuGet-pakket AutoCAD.NET.

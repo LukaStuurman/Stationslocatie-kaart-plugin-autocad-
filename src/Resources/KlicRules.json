@@ -1,0 +1,462 @@
+{
+  "Orientatiepolygoon||||L": {
+    "Layer": "B-WE-OG-INFO_ORIENTATIEPOLYGOON-GV",
+    "Block": "",
+    "Scale": 1
+  },
+  "Elektriciteitskabel|laagspanning|functional||L": {
+    "Layer": "B-WE-KL-ET_LS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Mast|landelijkHoogspanningsnet|functional||P": {
+    "Layer": "B-WE-KL-ET_LS-S",
+    "Block": "SKL-ET_LS_MAST-SO",
+    "Scale": 0.1
+  },
+  "Elektriciteitskabel|landelijkHoogspanningsnet|functional||L": {
+    "Layer": "B-WE-KL-ET_HS_LANDELIJK HOOGSPANNINGSNET-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "ExtraDetailinfo|landelijkHoogspanningsnet|||L": {
+    "Layer": "B-WE-OG-INFO-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Telecommunicatiekabel|datatransport|functional||L": {
+    "Layer": "B-WE-KL-DATA-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Mantelbuis|datatransport|functional||L": {
+    "Layer": "B-WE-KL-DATA_MANTELBUIS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Mantelbuis|overig|functional||L": {
+    "Layer": "B-WE-KL-OVERIG_MANTELBUIS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Overig|overig|functional||L": {
+    "Layer": "B-WE-KL-OVERIG-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "ExtraDetailinfo|rioolOnderOverOfOnderdruk|||L": {
+    "Layer": "B-WE-OG-INFO-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Rioolleiding|rioolOnderOverOfOnderdruk|functional||L": {
+    "Layer": "B-WE-RI-DRUK-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Rioolleiding|rioolOnderOverOfOnderdruk|disused||L": {
+    "Layer": "V-WE-RI-DRUK-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Appurtenance|overig|functional|onbekend|P": {
+    "Layer": "B-WE-KL-OVERIG_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|overig|functional|overig|P": {
+    "Layer": "B-WE-KL-OVERIG_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "EigenTopografie|||overig|L": {
+    "Layer": "B-WE-KL-OVERIG_HULPSTUK-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Kabelbed|datatransport|functional||L": {
+    "Layer": "B-WE-KL-DATA_KABELBED-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Duct|datatransport|functional||L": {
+    "Layer": "B-WE-KL-DATA_DUCT-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Appurtenance|datatransport|functional|handhole|P": {
+    "Layer": "B-WE-KL-DATA_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|datatransport|functional|overlengte|P": {
+    "Layer": "B-WE-KL-DATA_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERLENGTE-SO",
+    "Scale": 0.1
+  },
+  "Kast|datatransport|functional||P": {
+    "Layer": "B-WE-KL-DATA_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_KAST-SO",
+    "Scale": 0.1
+  },
+  "TechnischGebouw|datatransport|functional||P": {
+    "Layer": "B-WE-KL-DATA_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_TECHNISCH GEBOUW-SO",
+    "Scale": 0.1
+  },
+  "ExtraDetailinfo|datatransport|||L": {
+    "Layer": "B-WE-OG-INFO-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Appurtenance|datatransport|functional|overig|P": {
+    "Layer": "B-WE-KL-DATA_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|datatransport|functional|GTWP|P": {
+    "Layer": "B-WE-KL-DATA_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|datatransport|functional|mof|P": {
+    "Layer": "B-WE-KL-DATA_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_MOF-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|datatransport|functional|afdekplaten|P": {
+    "Layer": "B-WE-KL-DATA_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Rioolleiding|rioolVrijverval|functional||L": {
+    "Layer": "B-WE-RI-VRIJVERVAL-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Mantelbuis|rioolVrijverval|functional||L": {
+    "Layer": "B-WE-RI-VRIJVERVAL_MANTELBUIS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Appurtenance|rioolVrijverval|functional|kolk|P": {
+    "Layer": "B-WE-IE-MEUBILAIR-S",
+    "Block": "SIE-MEUBILAIR_PUT_KOLK-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|rioolVrijverval|functional|inspectieput|P": {
+    "Layer": "B-WE-KL-OVERIG_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|rioolVrijverval|functional|overstort|P": {
+    "Layer": "B-WE-RI-VRIJVERVAL_HULPSTUK-S",
+    "Block": "SRI-HULP_KLEP-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|rioolVrijverval|functional|uitlaatconstructie|P": {
+    "Layer": "B-WE-RI-VRIJVERVAL_HULPSTUK-S",
+    "Block": "SRI-HULP_VENTIEL_TAP-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|rioolOnderOverOfOnderdruk|functional|inspectieput|P": {
+    "Layer": "B-WE-KL-OVERIG_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Mantelbuis|rioolOnderOverOfOnderdruk|functional||L": {
+    "Layer": "B-WE-RI-DRUK_MANTELBUIS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Appurtenance|rioolOnderOverOfOnderdruk|functional|overig|P": {
+    "Layer": "B-WE-RI-PERSLEIDING_HULPSTUK-S",
+    "Block": "SRI-HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "ExtraDetailinfo|middenspanning|||L": {
+    "Layer": "B-WE-OG-INFO-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "TechnischGebouw|middenspanning|functional||P": {
+    "Layer": "B-WE-KL-ET_MS_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_TECHNISCH GEBOUW-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|middenspanning|functional|mof|P": {
+    "Layer": "B-WE-KL-ET_MS_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_MOF-SO",
+    "Scale": 0.1
+  },
+  "Mantelbuis|middenspanning|functional||L": {
+    "Layer": "B-WE-KL-ET_MS_MANTELBUIS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Elektriciteitskabel|middenspanning|functional||L": {
+    "Layer": "B-WE-KL-ET_MS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Elektriciteitskabel|middenspanning|disused||L": {
+    "Layer": "V-WE-KL-ET_MS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Duct|middenspanning|functional||L": {
+    "Layer": "B-WE-KL-ET_MS_DUCT-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Appurtenance|gasLageDruk|functional|deliveryPoint|P": {
+    "Layer": "B-WE-KL-GAS_LD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "TechnischGebouw|gasLageDruk|functional||P": {
+    "Layer": "B-WE-KL-GAS_LD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_TECHNISCH GEBOUW-SO",
+    "Scale": 0.1
+  },
+  "Kast|gasLageDruk|functional||P": {
+    "Layer": "B-WE-KL-GAS_LD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_KAST-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasLageDruk|functional|eindkap|P": {
+    "Layer": "B-WE-KL-GAS_LD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasLageDruk|functional|overgangsstuk|P": {
+    "Layer": "B-WE-KL-GAS_LD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasLageDruk|functional|oilGasChemicalsNode|P": {
+    "Layer": "B-WE-KL-GAS_LD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasLageDruk|functional|gasstopper|P": {
+    "Layer": "B-WE-KL-GAS_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasLageDruk|functional|verloopstuk|P": {
+    "Layer": "B-WE-KL-GAS_LD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_VERLOOP-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasLageDruk|functional|algemeenGasTransportOnderdeel|P": {
+    "Layer": "B-WE-KL-GAS_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasLageDruk|functional|aftakzadel|P": {
+    "Layer": "B-WE-KL-GAS_LD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasLageDruk|functional|tstuk|P": {
+    "Layer": "B-WE-KL-GAS_LD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_T STUK-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasLageDruk|functional|afsluiter|P": {
+    "Layer": "B-WE-KL-GAS_LD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_AFSLUITER-SO",
+    "Scale": 0.1
+  },
+  "OlieGasChemicalienPijpleiding|gasLageDruk|functional||L": {
+    "Layer": "B-WE-KL-GAS_LD-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Mantelbuis|gasLageDruk|functional||L": {
+    "Layer": "B-WE-KL-GAS_LD_MANTELBUIS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "OlieGasChemicalienPijpleiding|gasLageDruk|disused||L": {
+    "Layer": "V-WE-KL-GAS_LD-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "ExtraDetailinfo|laagspanning|||L": {
+    "Layer": "B-WE-OG-INFO-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Kast|laagspanning|functional||P": {
+    "Layer": "B-WE-KL-ET_LS_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_KAST-SO",
+    "Scale": 0.1
+  },
+  "TechnischGebouw|laagspanning|functional||P": {
+    "Layer": "B-WE-KL-ET_LS_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_TECHNISCH GEBOUW-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|laagspanning|functional|deliveryPoint|P": {
+    "Layer": "B-WE-KL-ET_LS_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|laagspanning|functional|mof|P": {
+    "Layer": "B-WE-KL-ET_LS_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_MOF-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|laagspanning|projected|mof|P": {
+    "Layer": "N-WE-KL-ET_LS_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_MOF-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|laagspanning|functional|streetLight|P": {
+    "Layer": "B-WE-IE-MEUBILAIR-S",
+    "Block": "SIE-MEUBILAIR_PAAL_LICHTMAST-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|laagspanning|functional|kbMeetpunt|P": {
+    "Layer": "B-WE-KL-ET_LS_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_KB MEETPUNT-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|laagspanning|functional|kbEindpunt|P": {
+    "Layer": "B-WE-KL-ET_LS_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Mantelbuis|laagspanning|functional||L": {
+    "Layer": "B-WE-KL-ET_LS_MANTELBUIS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Elektriciteitskabel|laagspanning|disused||L": {
+    "Layer": "V-WE-KL-ET_LS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Duct|laagspanning|functional||L": {
+    "Layer": "B-WE-KL-ET_LS_DUCT-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Kabelbed|laagspanning|functional||L": {
+    "Layer": "B-WE-KL-ET_LS_KABELBED-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "TechnischGebouw|gasHogeDruk|functional||P": {
+    "Layer": "B-WE-KL-GAS_HD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_TECHNISCH GEBOUW-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasHogeDruk|functional|eindkap|P": {
+    "Layer": "B-WE-KL-GAS_HD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasHogeDruk|functional|overgangsstuk|P": {
+    "Layer": "B-WE-KL-GAS_HD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasHogeDruk|functional|tstuk|P": {
+    "Layer": "B-WE-KL-GAS_HD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_T STUK-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasHogeDruk|functional|verloopstuk|P": {
+    "Layer": "B-WE-KL-GAS_HD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_VERLOOP-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasHogeDruk|functional|afsluiter|P": {
+    "Layer": "B-WE-KL-GAS_HD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_AFSLUITER-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|gasHogeDruk|projected|afsluiter|P": {
+    "Layer": "N-WE-KL-GAS_HD_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_AFSLUITER-SO",
+    "Scale": 0.1
+  },
+  "OlieGasChemicalienPijpleiding|gasHogeDruk|functional||L": {
+    "Layer": "B-WE-KL-GAS_HD-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Mantelbuis|gasHogeDruk|functional||L": {
+    "Layer": "B-WE-KL-GAS_HD_MANTELBUIS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Duct|gasHogeDruk|functional||L": {
+    "Layer": "B-WE-KL-GAS_HD_DUCT-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Appurtenance|water|functional|waterExhaustPoint|P": {
+    "Layer": "B-WE-KL-WATER_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|water|functional|treatmentPlant|P": {
+    "Layer": "B-WE-KL-WATER_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_TECHNISCH GEBOUW-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|water|functional|fireHydrant|P": {
+    "Layer": "B-WE-KL-WATER-S",
+    "Block": "SKL-WATER_BRANDKRAAN_BRANDPUT-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|water|functional|eindpunt|P": {
+    "Layer": "B-WE-KL-WATER_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_OVERIG-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|water|functional|afsluiter|P": {
+    "Layer": "B-WE-KL-WATER_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_AFSLUITER-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|water|disused|afsluiter|P": {
+    "Layer": "V-WE-KL-WATER_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_AFSLUITER-SO",
+    "Scale": 0.1
+  },
+  "Appurtenance|water|functional|meter|P": {
+    "Layer": "B-WE-KL-WATER_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_CONTROLEELEMENT-SO",
+    "Scale": 0.1
+  },
+  "Waterleiding|water|functional||L": {
+    "Layer": "B-WE-KL-WATER-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Waterleiding|water|disused||L": {
+    "Layer": "V-WE-KL-WATER-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Mantelbuis|water|functional||L": {
+    "Layer": "B-WE-KL-WATER_MANTELBUIS-G",
+    "Block": "",
+    "Scale": 1
+  },
+  "Appurtenance|water|functional|samplingStation|P": {
+    "Layer": "B-WE-KL-WATER_HULPSTUK-S",
+    "Block": "SKL-WTB_HULP_TECHNISCH GEBOUW-SO",
+    "Scale": 0.1
+  },
+  "Mantelbuis|water|disused||L": {
+    "Layer": "V-WE-KL-WATER_MANTELBUIS-G",
+    "Block": "",
+    "Scale": 1
+  }
+}

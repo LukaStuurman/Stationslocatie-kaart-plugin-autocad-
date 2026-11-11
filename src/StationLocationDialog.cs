@@ -126,11 +126,24 @@ public sealed class Plugin
                                 break;
                             }
 
+                            string? klicFolder = null;
+                            if (references.Kind == MapKind.KLIC)
+                            {
+                                using var folder = new FolderBrowserDialog { Description = "Kies de map van de uitgepakte KLIC-levering",
+                                    UseDescriptionForTitle = true, ShowNewFolderButton = false };
+                                if (folder.ShowDialog() != DialogResult.OK) break;
+                                klicFolder = folder.SelectedPath;
+                            }
                             using var save = new SaveFileDialog { Filter = filter, DefaultExt = "dwg",
                                 FileName = references.Kind + " " + Path.GetFileNameWithoutExtension(doc.Name) + ".dwg" };
                             if (Path.IsPathFullyQualified(doc.Database.Filename))
                                 save.InitialDirectory = Path.GetDirectoryName(doc.Database.Filename);
                             if (save.ShowDialog() != DialogResult.OK) break;
+                            if (klicFolder != null)
+                            {
+                                StationReferences.QueueCreate(doc, save.FileName, default, MapKind.KLIC, klicFolder);
+                                return;
+                            }
                             LayoutManager.Current.CurrentLayout = "Model";
                             var first = doc.Editor.GetPoint("\nKies de eerste hoek van het kaartgebied: ");
                             if (first.Status != PromptStatus.OK) break;

@@ -9,12 +9,14 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <PlatformTarget>x64</PlatformTarget>
-    <Version>1.4.27</Version>
+    <Version>1.4.28</Version>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Resources/Techbase.png" LogicalName="Techbase.png" />
     <EmbeddedResource Include="Resources/Timmermans.png" LogicalName="Timmermans.png" />
     <EmbeddedResource Include="Resources/StationGeometry.json.gz" LogicalName="StationGeometry.json.gz" />
+    <EmbeddedResource Include="Resources/KlicRules.json" LogicalName="KlicRules.json" />
+    <EmbeddedResource Include="Resources/KlicStyles.dxf.gz" LogicalName="KlicStyles.dxf.gz" />
     <PackageReference Include="AutoCAD.NET" Version="$(ApiVersion)" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 </Project>
