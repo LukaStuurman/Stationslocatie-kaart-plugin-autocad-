@@ -52,7 +52,8 @@ public sealed class Plugin
                                 fields = fields with { DrawingNumber = StationLocationSheets.DefaultDrawingNumber(sheet) };
                             LayoutManager.Current.CurrentLayout = "Model";
                             var editor = doc.Editor;
-                            if (!StationLocationSheets.PickLocation(doc, out var point, out var rotation)) break;
+                            var block = StationBlockLibrary.Read().Default;
+                            if (!StationLocationSheets.PickLocation(doc, block, out var point, out var rotation)) break;
                             if (input.LookupAddress && string.IsNullOrWhiteSpace(fields.Address))
                             {
                                 editor.WriteMessage("\nDichtstbijzijnd adres ophalen bij PDOK…");
@@ -60,7 +61,7 @@ public sealed class Plugin
                                 if (result.Address != null) fields = fields with { Address = result.Address };
                                 editor.WriteMessage("\n" + result.Message);
                             }
-                            StationLocationSheets.Create(doc, sheet, fields, new Point3d(point.X, point.Y, 0), rotation);
+                            StationLocationSheets.Create(doc, sheet, fields, new Point3d(point.X, point.Y, 0), rotation, block);
                             selected = sheet;
                             editor.Regen();
                             editor.WriteMessage($"\nA3-layout ‘{sheet.Name}’ aangemaakt.");
@@ -111,6 +112,39 @@ public sealed class Plugin
                             doc.Editor.Regen();
                         }
                         break;
+                    case StationLocationAction.Blocks:
+                        using (var library = new StationBlockDialog(StationBlockLibrary.Read(), selected))
+                        {
+                            if (AcApp.ShowModalDialog(library) != DialogResult.OK) break;
+                            switch (library.Action)
+                            {
+                                case BlockLibraryAction.Register:
+                                    var corners = MessageBox.Show("Wil je vier hoekpunten C1–C4 aanwijzen?", "Trafoblokken",
+                                        MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                                    if (corners == DialogResult.Cancel) break;
+                                    LayoutManager.Current.CurrentLayout = "Model";
+                                    StationBlockLibrary.Register(doc, corners == DialogResult.Yes);
+                                    break;
+                                case BlockLibraryAction.Use:
+                                    StationBlockLibrary.SetDefault(library.Choice);
+                                    break;
+                                case BlockLibraryAction.Replace when selected != null:
+                                    StationLocationSheets.ApplyBlockChoice(doc.Database, selected, library.Choice);
+                                    doc.Editor.Regen();
+                                    break;
+                                case BlockLibraryAction.Remove when library.Choice is { } choice:
+                                    if (MessageBox.Show($"'{choice.Name}' uit de bibliotheek verwijderen?", "Trafoblokken",
+                                        MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                                        StationBlockLibrary.Remove(choice);
+                                    break;
+                                case BlockLibraryAction.ToggleCorners when selected != null:
+                                    StationLocationSheets.ToggleCornerTable(doc.Database, selected);
+                                    selected = selected with { ShowCorners = !selected.ShowCorners };
+                                    doc.Editor.Regen();
+                                    break;
+                            }
+                        }
+                        break;
                     case StationLocationAction.Note when selected != null:
                         var noteEditor = doc.Editor;
                         var note = noteEditor.GetString(new PromptStringOptions("\nKorte kaartopmerking: ") { AllowSpaces = true });
@@ -154,7 +188,7 @@ public sealed class Plugin
     }
 }
 
-internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview, Plot, Note }
+internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview, Plot, Note, Blocks }
 
 internal sealed class StationLocationDialog : Form
 {
@@ -259,6 +293,7 @@ internal sealed class StationLocationDialog : Form
         var note = Add("Kaartopmerking plaatsen", StationLocationAction.Note, false);
         var delete = Add("Locatie verwijderen", StationLocationAction.Delete, false);
         Group("Project");
+        Add("Trafoblokken beheren", StationLocationAction.Blocks);
         Add("Alle bladen bewerken", StationLocationAction.EditAll, sheets.Count > 0);
         Add("Projectgegevens", StationLocationAction.Project, sheets.Count > 0);
         Group("Uitvoer");

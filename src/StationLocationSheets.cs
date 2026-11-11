@@ -6,7 +6,7 @@ using Autodesk.AutoCAD.Geometry;
 
 namespace Stationslocaties;
 
-internal sealed record StationSheet(string Name, string Trafo, int Alternative, string Layer);
+internal sealed record StationSheet(string Name, string Trafo, int Alternative, string Layer, bool ShowCorners = true);
 internal sealed record StationSheetChange(StationSheet Before, StationSheet After);
 internal sealed record StationEditPlan(StationSheet Target, StationSheetChange[] Changes);
 
@@ -212,19 +212,21 @@ internal static class StationLocationSheets
             Field("PROJECTNR.OPDR."), Field("GET"), Field("TDD"), Field("OVERIGE2"), Field("OVERIGE1"), Field("TEKENINGNUMMER"), path);
     }
 
-    internal static bool PickLocation(Document doc, out Point3d point, out double rotation)
+    internal static bool PickLocation(Document doc, StationBlockChoice? choice, out Point3d point, out double rotation)
     {
         var db = doc.Database;
         using var tr = db.TransactionManager.StartTransaction();
-        using var preview = new BlockReference(Point3d.Origin, NativeStationGeometry.GetSymbol(db, tr, Symbol));
+        using var preview = new BlockReference(Point3d.Origin, ResolveBlock(db, tr, choice));
         preview.SetDatabaseDefaults(db);
+        preview.ScaleFactors = choice?.Scale ?? new Scale3d(1);
         var accepted = new StationPlacementJig(preview).Pick(doc.Editor);
+        if (accepted) tr.Commit();
         point = preview.Position;
         rotation = preview.Rotation;
         return accepted;
     }
 
-    internal static void Create(Document doc, StationSheet sheet, StationFields fields, Point3d point, double rotation)
+    internal static void Create(Document doc, StationSheet sheet, StationFields fields, Point3d point, double rotation, StationBlockChoice? choice)
     {
         var db = doc.Database;
         if (db.Insunits is not (UnitsValue.Meters or UnitsValue.Undefined))
@@ -232,12 +234,6 @@ internal static class StationLocationSheets
         var layouts = LayoutManager.Current;
         if (layouts.LayoutExists(sheet.Name))
             throw new InvalidOperationException($"Layout ‘{sheet.Name}’ bestaat al.");
-        using (var check = db.TransactionManager.StartTransaction())
-        {
-            if (ModelBlocks(db, check).Any(block => BlockName(check, block).Equals("TRAFO", StringComparison.OrdinalIgnoreCase)))
-                throw new InvalidOperationException("De modelruimte bevat al losse TRAFO-blokken. Gebruik een projecttekening met alleen de achtergrondkaarten voor deze werkstroom.");
-        }
-
         var step = "layouttabbladen aanmaken";
         var detailCreated = false;
         var committed = false;
@@ -252,13 +248,14 @@ internal static class StationLocationSheets
             var viewport = NativeStationGeometry.AppendSheet(db, tr, layout, false);
             step = "trafoblok plaatsen";
             var layerId = Layer(db, tr, sheet.Layer, true);
-            var blockId = NativeStationGeometry.GetSymbol(db, tr, Symbol);
+            var blockId = ResolveBlock(db, tr, choice);
             var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
-            var reference = new BlockReference(point, blockId) { LayerId = layerId, Rotation = rotation };
+            var reference = new BlockReference(point, blockId) { LayerId = layerId, Rotation = rotation, ScaleFactors = choice?.Scale ?? new Scale3d(1) };
             model.AppendEntity(reference);
             tr.AddNewlyCreatedDBObject(reference, true);
+            AddBlockAttributes(tr, reference);
             WriteMetadata(db, tr, layout, sheet);
-            UpdateCornerTable(db, tr, layout, reference);
+            UpdateCornerTable(db, tr, layout, reference, sheet.ShowCorners);
             step = "detailkaart centreren";
             Center(tr, viewport, point);
             step = "onderhoek invullen";
@@ -378,13 +375,13 @@ internal static class StationLocationSheets
         var sheets = ReadSheets(db, tr);
         if (sheets.Count > 0)
         {
-            var blocks = ModelBlocks(db, tr).Where(block => BlockName(tr, block) == Symbol)
+            var blocks = ModelBlocks(db, tr).Where(block => IsStationBlock(tr, block))
                 .ToLookup(block => block.Layer, StringComparer.OrdinalIgnoreCase);
             foreach (var sheet in sheets)
             {
                 Repair(sheet.Name, false);
                 if (blocks[sheet.Layer].SingleOrDefault() is { } station)
-                    UpdateCornerTable(db, tr, GetLayout(db, tr, sheet.Name), station);
+                    UpdateCornerTable(db, tr, GetLayout(db, tr, sheet.Name), station, sheet.ShowCorners);
             }
         }
         if (HasOverview(db, tr)) Repair(OverviewName, true);
@@ -398,19 +395,92 @@ internal static class StationLocationSheets
     {
         using var tr = db.TransactionManager.StartTransaction();
         var stations = changed.Where(IsLive).Select(id => tr.GetObject(id, OpenMode.ForRead))
-            .OfType<BlockReference>().Where(station => BlockName(tr, station) == Symbol)
+            .OfType<BlockReference>().Where(station => IsStationBlock(tr, station))
             .ToLookup(station => station.Layer, StringComparer.OrdinalIgnoreCase);
         if (stations.Count == 0) return;
+        var updated = false;
         foreach (var sheet in ReadSheets(db, tr))
-            if (stations[sheet.Layer].FirstOrDefault() is { } station)
-                UpdateCornerTable(db, tr, GetLayout(db, tr, sheet.Name), station);
+        {
+            if (stations[sheet.Layer].FirstOrDefault() is not { } station) continue;
+            var layout = GetLayout(db, tr, sheet.Name);
+            if (FindMapViewport(tr, layout) is { } viewport) Center(tr, viewport, station.Position);
+            UpdateCornerTable(db, tr, layout, station, sheet.ShowCorners);
+            updated = true;
+        }
+        if (updated) RefreshMarkers(db, tr);
         tr.Commit();
     }
 
-    private static void UpdateCornerTable(Database db, Transaction tr, Layout layout, BlockReference station)
+    private static ObjectId ResolveBlock(Database db, Transaction tr, StationBlockChoice? choice) =>
+        choice == null ? NativeStationGeometry.GetSymbol(db, tr, Symbol) : StationBlockLibrary.Import(db, tr, choice);
+
+    private static bool IsStationBlock(Transaction tr, BlockReference block)
     {
+        var name = BlockName(tr, block);
+        return name == Symbol || name.StartsWith(StationBlockLibrary.DefinitionPrefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AddBlockAttributes(Transaction tr, BlockReference reference)
+    {
+        var definition = (BlockTableRecord)tr.GetObject(reference.BlockTableRecord, OpenMode.ForRead);
+        foreach (ObjectId id in definition)
+        {
+            if (!IsLive(id) || tr.GetObject(id, OpenMode.ForRead) is not AttributeDefinition { Constant: false } template) continue;
+            var attribute = new AttributeReference();
+            attribute.SetAttributeFromBlock(template, reference.BlockTransform);
+            attribute.TextString = template.TextString;
+            reference.AttributeCollection.AppendAttribute(attribute);
+            tr.AddNewlyCreatedDBObject(attribute, true);
+        }
+    }
+
+    internal static void ApplyBlockChoice(Database db, StationSheet sheet, StationBlockChoice? choice)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        var station = LocationBlock(tr, ModelBlocks(db, tr), sheet);
+        var target = ResolveBlock(db, tr, choice);
+        if (station.BlockTableRecord != target)
+        {
+            var owner = (BlockTableRecord)tr.GetObject(station.OwnerId, OpenMode.ForWrite);
+            var replacement = new BlockReference(station.Position, target)
+            {
+                Rotation = station.Rotation, Normal = station.Normal, LayerId = station.LayerId,
+                ScaleFactors = choice?.Scale ?? new Scale3d(1)
+            };
+            owner.AppendEntity(replacement);
+            tr.AddNewlyCreatedDBObject(replacement, true);
+            AddBlockAttributes(tr, replacement);
+            if (!station.IsWriteEnabled) station.UpgradeOpen();
+            station.Erase();
+            station = replacement;
+            var order = (DrawOrderTable)tr.GetObject(owner.DrawOrderTableId, OpenMode.ForWrite);
+            order.MoveToTop(new ObjectIdCollection(new[] { station.ObjectId }));
+        }
+        var layout = GetLayout(db, tr, sheet.Name);
+        Center(tr, MapViewport(tr, layout), station.Position);
+        UpdateCornerTable(db, tr, layout, station, sheet.ShowCorners);
+        tr.Commit();
+    }
+
+    internal static void ToggleCornerTable(Database db, StationSheet sheet)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        var layout = GetLayout(db, tr, sheet.Name, OpenMode.ForWrite);
+        var station = LocationBlock(tr, ModelBlocks(db, tr), sheet);
+        var updated = sheet with { ShowCorners = !sheet.ShowCorners };
+        WriteMetadata(db, tr, layout, updated);
+        UpdateCornerTable(db, tr, layout, station, updated.ShowCorners);
+        tr.Commit();
+    }
+
+    private static void UpdateCornerTable(Database db, Transaction tr, Layout layout, BlockReference station, bool show)
+    {
+        var coordinates = !show ? [] : BlockName(tr, station) == Symbol
+            ? NativeStationGeometry.StationCorners(station)
+            : StationBlockLibrary.Corners(tr, station);
+        var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        if (coordinates.Length != 4 && !layers.Has(CornerTableLayer)) return;
         var layer = Layer(db, tr, CornerTableLayer);
-        var coordinates = NativeStationGeometry.StationCorners(station);
         const double bottom = 3.124045803; // Bottom edge of the cable legend in the detail sheet template.
         const double offset = bottom - 5;
         const double legendLeft = 189.866277972;
@@ -433,15 +503,16 @@ internal static class StationLocationSheets
         var previous = space.Cast<ObjectId>().Where(id => IsLive(id) && id.ObjectClass.DxfName is "TEXT" or "LWPOLYLINE" or "LINE")
             .Select(id => (Entity)tr.GetObject(id, OpenMode.ForRead)).Where(entity => entity.LayerId == layer).ToArray();
         var texts = previous.OfType<DBText>().ToArray();
-        if (previous.Length == cells.Count + 2 && texts.Length == cells.Count && cells.All(cell =>
+        if (coordinates.Length == 4 && previous.Length == cells.Count + 2 && texts.Length == cells.Count && cells.All(cell =>
             texts.Any(text => text.TextString == cell.Text && text.Position == new Point3d(cell.X, cell.Y, 0)))) return;
 
-        if (!space.IsWriteEnabled) space.UpgradeOpen();
         foreach (var entity in previous)
         {
             if (!entity.IsWriteEnabled) entity.UpgradeOpen();
             entity.Erase();
         }
+        if (coordinates.Length != 4) return;
+        if (!space.IsWriteEnabled) space.UpgradeOpen();
         void Add(Entity entity)
         {
             entity.LayerId = layer;
@@ -532,7 +603,7 @@ internal static class StationLocationSheets
         {
             var station = LocationBlock(tr, ModelBlocks(db, tr), location);
             Center(tr, viewport, station.Position);
-            UpdateCornerTable(db, tr, layout, station);
+            UpdateCornerTable(db, tr, layout, station, location.ShowCorners);
             var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
             IsolateViewport(viewport, layers[location.Layer], StationLayers(tr, layers), NoteLayerId(layers, location));
         }
@@ -547,7 +618,7 @@ internal static class StationLocationSheets
         if (!List(db).Contains(sheet))
             throw new InvalidOperationException("De geselecteerde stationlocatie is al verwijderd.");
         using var tr = db.TransactionManager.StartTransaction();
-        foreach (var block in ModelBlocks(db, tr).Where(block => block.Layer == sheet.Layer && BlockName(tr, block) == Symbol))
+        foreach (var block in ModelBlocks(db, tr).Where(block => block.Layer == sheet.Layer && IsStationBlock(tr, block)))
         {
             block.UpgradeOpen();
             block.Erase();
@@ -702,7 +773,7 @@ internal static class StationLocationSheets
             .Select(id => tr.GetObject(id, OpenMode.ForRead)).OfType<BlockReference>().ToArray();
 
     private static BlockReference LocationBlock(Transaction tr, BlockReference[] blocks, StationSheet sheet) =>
-        RequireLocationBlock(blocks.Where(block => block.Layer == sheet.Layer && BlockName(tr, block) == Symbol), sheet);
+        RequireLocationBlock(blocks.Where(block => block.Layer == sheet.Layer && IsStationBlock(tr, block)), sheet);
 
     private static BlockReference RequireLocationBlock(IEnumerable<BlockReference> blocks, StationSheet sheet)
     {
@@ -846,7 +917,7 @@ internal static class StationLocationSheets
             if (!IsLive(id) || id.ObjectClass.DxfName is not ("INSERT" or "CIRCLE" or "MTEXT")) continue;
             if (tr.GetObject(id, OpenMode.ForRead) is not Entity entity) continue;
             if (entity.LayerId == overviewLayer) markers.Add(entity);
-            else if (entity is BlockReference block && BlockName(tr, block) == Symbol) stationBlocks.Add(block);
+            else if (entity is BlockReference block && IsStationBlock(tr, block)) stationBlocks.Add(block);
         }
         var blocks = stationBlocks.ToLookup(block => block.Layer, StringComparer.OrdinalIgnoreCase);
         var locations = sheets.Select(sheet => (Sheet: sheet, Block: RequireLocationBlock(blocks[sheet.Layer], sheet))).ToArray();
@@ -945,7 +1016,7 @@ internal static class StationLocationSheets
             tr.AddNewlyCreatedDBObject(app, true);
         }
         using var data = new ResultBuffer(new TypedValue(1001, Tag),
-            new TypedValue(1000, sheet.Trafo), new TypedValue(1071, sheet.Alternative), new TypedValue(1000, sheet.Layer));
+            new TypedValue(1000, sheet.Trafo), new TypedValue(1071, sheet.Alternative), new TypedValue(1000, sheet.Layer), new TypedValue(1070, (short)(sheet.ShowCorners ? 1 : 0)));
         layout.XData = data;
     }
 
@@ -959,9 +1030,9 @@ internal static class StationLocationSheets
             var layout = (Layout)tr.GetObject(entry.Value, OpenMode.ForRead);
             using var data = layout.GetXDataForApplication(Tag);
             var values = data?.AsArray();
-            if (values?.Length != 4) continue;
+            if (values == null || values.Length is not (4 or 5)) continue;
             result.Add(new(layout.LayoutName, Convert.ToString(values[1].Value, CultureInfo.InvariantCulture) ?? "",
-                Convert.ToInt32(values[2].Value, CultureInfo.InvariantCulture), (string)values[3].Value));
+                Convert.ToInt32(values[2].Value, CultureInfo.InvariantCulture), (string)values[3].Value, values.Length == 4 || Convert.ToInt16(values[4].Value) != 0));
         }
         return result;
     }
