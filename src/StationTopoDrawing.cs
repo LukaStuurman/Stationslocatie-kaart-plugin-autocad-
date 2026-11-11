@@ -19,22 +19,22 @@ internal static partial class StationTopo
             .SelectMany(e => e.Descendants()).Any(e => e.Name == Gml + "Polygon" || e.Name == Gml + "Surface") ? "GV" : "G";
         return type switch
         {
-            "pand" => new("B-WE-OG-BEBOUWING-GV", 7),
-            "gebouwinstallatie" or "overigbouwwerk" => new($"B-WE-OG-BEBOUWING{suffix}-{shapeSuffix}", 7),
+            "pand" => new("B-WE-OG-BEBOUWING-GV"),
+            "gebouwinstallatie" or "overigbouwwerk" => new($"B-WE-OG-BEBOUWING{suffix}-{shapeSuffix}"),
             "wegdeel" or "ondersteunendwegdeel" => Road(material, subtype),
-            "onbegroeidterreindeel" when material is "erf" or "oever" => new("B-WE-OG-TERREIN" + Suffix(material) + "-GV", 7),
+            "onbegroeidterreindeel" when material is "erf" or "oever" => new("B-WE-OG-TERREIN" + Suffix(material) + "-GV"),
             "onbegroeidterreindeel" when material.Contains("verhard", StringComparison.Ordinal) => Road(material, subtype),
-            "onbegroeidterreindeel" => new($"B-WE-OG-TERREIN_ONBEGROEID{suffix}-GV", 7),
+            "onbegroeidterreindeel" => new($"B-WE-OG-TERREIN_ONBEGROEID{suffix}-GV"),
             "begroeidterreindeel" => Green(material, subtype),
             "waterdeel" or "ondersteunendwaterdeel" => Water(subtype),
-            "vegetatieobject" when subtype.Contains("boom", StringComparison.OrdinalIgnoreCase) => new("B-WE-GR-BOOM-S", 90),
-            "vegetatieobject" when subtype.Contains("haag", StringComparison.OrdinalIgnoreCase) => new("B-WE-GR-HAAG-G", 90),
-            "vegetatieobject" => new($"B-WE-GR-VEGETATIE{suffix}-{shapeSuffix}", 90),
-            "kunstwerkdeel" or "overbruggingsdeel" or "tunneldeel" => new($"B-WE-KW-KUNSTWERK{suffix}-{shapeSuffix}", 170),
+            "vegetatieobject" when subtype.Contains("boom", StringComparison.OrdinalIgnoreCase) => new("B-WE-GR-BOOM-S"),
+            "vegetatieobject" when subtype.Contains("haag", StringComparison.OrdinalIgnoreCase) => new("B-WE-GR-HAAG-G"),
+            "vegetatieobject" => new($"B-WE-GR-VEGETATIE{suffix}-{shapeSuffix}"),
+            "kunstwerkdeel" or "overbruggingsdeel" or "tunneldeel" => new($"B-WE-KW-KUNSTWERK{suffix}-{shapeSuffix}"),
             "scheiding" or "overigescheiding" => Fence(subtype, shapeSuffix),
-            "spoor" => new("B-WE-AM-AS_SPOOR_TREIN-G", 10),
-            "straatmeubilair" or "weginrichtingselement" => new($"B-WE-IE-MEUBILAIR_WEGMEUBILAIR{suffix}-S", 7),
-            _ => new($"BGT-{type.ToUpperInvariant()}{suffix}-{shapeSuffix}", 7)
+            "spoor" => new("B-WE-AM-AS_SPOOR_TREIN-G"),
+            "straatmeubilair" or "weginrichtingselement" => new($"B-WE-IE-MEUBILAIR_WEGMEUBILAIR{suffix}-S"),
+            _ => new($"BGT-{type.ToUpperInvariant()}{suffix}-{shapeSuffix}")
         };
     }
 
@@ -50,40 +50,40 @@ internal static partial class StationTopo
         var suffix = Suffix(variant);
         return material switch
         {
-            "open verharding" => new($"B-WE-VH-OPENVERHARDING{suffix}-GV", 90),
-            "gesloten verharding" => new($"B-WE-VH-GESLOTENVERHARDING{suffix}-GV", 10),
-            "half verhard" or "halfverhard" => new($"B-WE-VH-HALFVERHARDING{suffix}-GV", variant == "grind" ? (short)252 : (short)130),
-            "onverhard" => new($"B-WE-VH-ONVERHARD{suffix}-GV", suffix.Length == 0 ? (short)252 : (short)210),
-            _ => new("B-WE-OG-WEG-GV", 7)
+            "open verharding" => new($"B-WE-VH-OPENVERHARDING{suffix}-GV"),
+            "gesloten verharding" => new($"B-WE-VH-GESLOTENVERHARDING{suffix}-GV"),
+            "half verhard" or "halfverhard" => new($"B-WE-VH-HALFVERHARDING{suffix}-GV"),
+            "onverhard" => new($"B-WE-VH-ONVERHARD{suffix}-GV"),
+            _ => new("B-WE-OG-WEG-GV")
         };
     }
 
     private static TopoStyle Green(string material, string subtype)
     {
         if (subtype.Contains("gras", StringComparison.OrdinalIgnoreCase) || material.Contains("gras", StringComparison.OrdinalIgnoreCase))
-            return new("B-WE-GR-GRAS-GV", 60);
+            return new("B-WE-GR-GRAS-GV");
         if (subtype == "bodembedekkers") subtype = "bodembedekker";
-        if (material == "loofbos" || subtype == "loofbos") return new("B-WE-GR-BOS_LOOF-GV", 40);
-        if (subtype.Length > 0) return new($"B-WE-GR-BEPLANTING_CULTUUR{Suffix(subtype)}-GV", 90);
-        return new("B-WE-OG-TERREIN_BEGROEID-GV", 7);
+        if (material == "loofbos" || subtype == "loofbos") return new("B-WE-GR-BOS_LOOF-GV");
+        if (subtype.Length > 0) return new($"B-WE-GR-BEPLANTING_CULTUUR{Suffix(subtype)}-GV");
+        return new("B-WE-OG-TERREIN_BEGROEID-GV");
     }
 
     private static TopoStyle Water(string subtype) => subtype switch
     {
-        "sloot" => new("B-WE-OG-WATER_SLOOT-GV", 120),
-        "meer" => new("B-WE-OG-WATER_MEER-GV", 140),
-        "greppel" => new("B-WE-OG-WATER_GREPPEL-GV", 160),
-        _ => new("B-WE-OG-WATER-GV", 130)
+        "sloot" => new("B-WE-OG-WATER_SLOOT-GV"),
+        "meer" => new("B-WE-OG-WATER_MEER-GV"),
+        "greppel" => new("B-WE-OG-WATER_GREPPEL-GV"),
+        _ => new("B-WE-OG-WATER-GV")
     };
 
     private static TopoStyle Fence(string subtype, string shapeSuffix) => subtype switch
     {
-        "muur" => new("B-WE-IE-TERREINAFSCHEIDING_KUNSTMATIG_MUUR-" + shapeSuffix, 90),
-        "hek" or "hekwerk" => new("B-WE-IE-TERREINAFSCHEIDING_KUNSTMATIG_HEKWERK-G", 20),
-        "beschoeiing" => new("B-WE-GK-BESCHOEIING-G", 130),
-        "kademuur" => new("B-WE-GK-KADEMUUR-" + shapeSuffix, 150),
-        "damwand" => new("B-WE-GK-KEERWAND_DAMWAND-G", 30),
-        _ => new($"BGT-SCHEIDING{Suffix(subtype)}-{shapeSuffix}", 7)
+        "muur" => new("B-WE-IE-TERREINAFSCHEIDING_KUNSTMATIG_MUUR-" + shapeSuffix),
+        "hek" or "hekwerk" => new("B-WE-IE-TERREINAFSCHEIDING_KUNSTMATIG_HEKWERK-G"),
+        "beschoeiing" => new("B-WE-GK-BESCHOEIING-G"),
+        "kademuur" => new("B-WE-GK-KADEMUUR-" + shapeSuffix),
+        "damwand" => new("B-WE-GK-KEERWAND_DAMWAND-G"),
+        _ => new($"BGT-SCHEIDING{Suffix(subtype)}-{shapeSuffix}")
     };
 
     private static string Suffix(string value)
@@ -102,12 +102,12 @@ internal static partial class StationTopo
         apps.Add(app);
         tr.AddNewlyCreatedDBObject(app, true);
 
+        using var darkGray = Autodesk.AutoCAD.Colors.Color.FromRgb(80, 80, 80);
         void Add(Entity entity, TopoStyle style, TopoSource source)
         {
             if (!layers.Has(style.Layer))
             {
-                var layer = new LayerTableRecord { Name = style.Layer, Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
-                    Autodesk.AutoCAD.Colors.ColorMethod.ByAci, style.Color) };
+                var layer = new LayerTableRecord { Name = style.Layer, Color = darkGray };
                 layers.Add(layer);
                 tr.AddNewlyCreatedDBObject(layer, true);
             }

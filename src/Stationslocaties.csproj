@@ -9,7 +9,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <PlatformTarget>x64</PlatformTarget>
-    <Version>1.4.26</Version>
+    <Version>1.4.27</Version>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Resources/Techbase.png" LogicalName="Techbase.png" />

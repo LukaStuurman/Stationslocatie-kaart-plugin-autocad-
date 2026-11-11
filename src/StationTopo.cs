@@ -10,7 +10,7 @@ using System.Xml.Linq;
 namespace Stationslocaties;
 
 internal readonly record struct TopoVertex(double X, double Y, double Bulge = 0);
-internal sealed record TopoStyle(string Layer, short Color);
+internal sealed record TopoStyle(string Layer);
 internal sealed record TopoSource(string Id, string Type, string Category, string Function, string BagId);
 internal sealed record TopoShape(TopoStyle Style, TopoSource Source, TopoVertex[] Vertices, bool Closed);
 internal sealed record TopoLabel(TopoStyle Style, TopoSource Source, TopoVertex Position, string Text, double Rotation);
@@ -249,7 +249,7 @@ internal static partial class StationTopo
                 var angle = Value(feature, position.Name.LocalName.Replace(".plaatsingspunt", ".hoek", StringComparison.Ordinal));
                 double.TryParse(angle, NumberStyles.Float, CultureInfo.InvariantCulture, out var degrees);
                 var layer = prefix.StartsWith("nummeraanduiding", StringComparison.Ordinal) ? "B-WE-OG-BEBOUWING-T18" : "B-WE-OG-TOPOGRAFIE-T18";
-                output.Add(new(new(layer, 10), metadata, point, text.Value.Trim(), -degrees * Math.PI / 180));
+                output.Add(new(new(layer), metadata, point, text.Value.Trim(), -degrees * Math.PI / 180));
             }
         }
     }
