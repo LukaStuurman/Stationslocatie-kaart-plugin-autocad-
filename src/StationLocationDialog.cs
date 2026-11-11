@@ -280,16 +280,32 @@ internal sealed class StationLocationDialog : Form
             : string.IsNullOrEmpty(pending) ? "Alle trafo’s hebben een VL en minstens één AL."
                 : "VL of AL ontbreekt bij " + pending + ".";
         var missing = sheets.Count - withPhoto.Count;
-        var header = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Margin = Padding.Empty };
+        var header = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 2, Margin = Padding.Empty };
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
         header.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         header.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
         header.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         header.Controls.Add(new Label { Text = "Trafolocatiekaarten", Dock = DockStyle.Fill, Font = new Font("Segoe UI", 17F, FontStyle.Bold) }, 0, 0);
-        header.Controls.Add(new Label { Text = message, ForeColor = StationTheme.Muted, Dock = DockStyle.Fill, AutoEllipsis = true }, 0, 1);
+        var info = new Button { Text = "ⓘ  Info", Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 4),
+            AccessibleName = "Informatie over Stationlocaties" };
+        header.Controls.Add(info, 1, 0);
+        StationTheme.StyleButtons(header, info);
+        toolTips.SetToolTip(info, "Functies en automatische updates");
+        info.Click += (_, _) =>
+        {
+            using var help = new StationHelpDialog();
+            help.ShowDialog(this);
+        };
+        var status = new Label { Text = message, ForeColor = StationTheme.Muted, Dock = DockStyle.Fill, AutoEllipsis = true };
+        header.Controls.Add(status, 0, 1);
+        header.SetColumnSpan(status, 2);
         var summary = $"{sheets.Count} locatiebladen  ·  {withPhoto.Count} met foto";
         if (missing > 0) summary += $"  ·  {missing} zonder foto";
-        header.Controls.Add(new Label { Text = summary, ForeColor = missing > 0 ? StationTheme.Accent : StationTheme.Muted,
-            Dock = DockStyle.Fill, AutoEllipsis = true }, 0, 2);
+        var photoStatus = new Label { Text = summary, ForeColor = missing > 0 ? StationTheme.Accent : StationTheme.Muted,
+            Dock = DockStyle.Fill, AutoEllipsis = true };
+        header.Controls.Add(photoStatus, 0, 2);
+        header.SetColumnSpan(photoStatus, 2);
         layout.Controls.Add(header, 0, 0);
         layout.SetColumnSpan(header, 2);
 
