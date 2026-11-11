@@ -83,6 +83,13 @@ internal static class NativeStationGeometry
         return id;
     }
 
+    internal static Point3d[] StationCorners(BlockReference station)
+    {
+        // The arrow tips C1–C4 point to the upper left, upper right, lower right and lower left of this outline.
+        var outline = Data.Value.Symbol.Single(shape => shape.K == "LWPOLYLINE" && shape.Closed && shape.V.Length == 4);
+        return new[] { 1, 2, 3, 0 }.Select(index => Point(outline.V[index]).TransformBy(station.BlockTransform)).ToArray();
+    }
+
     internal static ObjectId GetSymbol(Database db, Transaction tr, string name) =>
         GetBlock(db, tr, name, block =>
         {

@@ -111,6 +111,19 @@ public sealed class Plugin
                             doc.Editor.Regen();
                         }
                         break;
+                    case StationLocationAction.Note when selected != null:
+                        var noteEditor = doc.Editor;
+                        var note = noteEditor.GetString(new PromptStringOptions("\nKorte kaartopmerking: ") { AllowSpaces = true });
+                        if (note.Status != PromptStatus.OK || string.IsNullOrWhiteSpace(note.StringResult)) break;
+                        LayoutManager.Current.CurrentLayout = "Model";
+                        var pointResult = noteEditor.GetPoint("\nKies het beginpunt van de rode tekst binnen de cirkel van " + selected.Name + ": ");
+                        if (pointResult.Status == PromptStatus.OK)
+                        {
+                            StationLocationSheets.AddMapNote(doc, selected, note.StringResult.Trim(),
+                                pointResult.Value.TransformBy(noteEditor.CurrentUserCoordinateSystem));
+                            noteEditor.Regen();
+                        }
+                        break;
                     case StationLocationAction.Plot:
                         var names = sheets.Select(sheet => sheet.Name).ToList();
                         if (hasOverview)
@@ -141,7 +154,7 @@ public sealed class Plugin
     }
 }
 
-internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview, Plot }
+internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview, Plot, Note }
 
 internal sealed class StationLocationDialog : Form
 {
@@ -243,6 +256,7 @@ internal sealed class StationLocationDialog : Form
         var add = Add("Locatie plaatsen", StationLocationAction.Add);
         var open = Add("Open blad", StationLocationAction.Open, false);
         var edit = Add("Blad bewerken", StationLocationAction.Edit, false);
+        var note = Add("Kaartopmerking plaatsen", StationLocationAction.Note, false);
         var delete = Add("Locatie verwijderen", StationLocationAction.Delete, false);
         Group("Project");
         Add("Alle bladen bewerken", StationLocationAction.EditAll, sheets.Count > 0);
@@ -261,7 +275,7 @@ internal sealed class StationLocationDialog : Form
         StationTheme.StyleButtons(sidebar, add, delete);
         CancelButton = close;
 
-        void UpdateSelection() => edit.Enabled = open.Enabled = delete.Enabled = Selected != null;
+        void UpdateSelection() => edit.Enabled = open.Enabled = note.Enabled = delete.Enabled = Selected != null;
         locations.SelectedIndexChanged += (_, _) => UpdateSelection();
         Shown += (_, _) => UpdateSelection();
         locations.DoubleClick += (_, _) => { if (Selected != null) Choose(StationLocationAction.Open); };

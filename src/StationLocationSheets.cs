@@ -47,6 +47,9 @@ internal static class StationLocationSheets
     internal const string OverviewName = "Totaal";
     private const string Tag = "TECHBASE_STATIONBLAD";
     private const string Symbol = "TB_STATION_TRAFO";
+    private const string CornerTableLayer = "STATIONLOCATIES_HOEKPUNTEN";
+    private const string NoteLayerSuffix = "_KAARTOPMERKINGEN";
+    internal const double MarkerRadius = 20;
     private const string PhotoLayer = "TB_STATION_FOTO";
     private const string OverviewLayer = "TB_STATION_OVERZICHT";
     private const string PhotoFolderKey = "TB_STATION_FOTOMAP";
@@ -255,6 +258,7 @@ internal static class StationLocationSheets
             model.AppendEntity(reference);
             tr.AddNewlyCreatedDBObject(reference, true);
             WriteMetadata(db, tr, layout, sheet);
+            UpdateCornerTable(db, tr, layout, reference);
             step = "detailkaart centreren";
             Center(tr, viewport, point);
             step = "onderhoek invullen";
@@ -370,8 +374,106 @@ internal static class StationLocationSheets
             NativeStationGeometry.RepairFreeSpaceLegend(tr, layout, overview);
         }
 
-        foreach (var sheet in ReadSheets(db, tr)) Repair(sheet.Name, false);
+        var sheets = ReadSheets(db, tr);
+        if (sheets.Count > 0)
+        {
+            var blocks = ModelBlocks(db, tr).Where(block => BlockName(tr, block) == Symbol)
+                .ToLookup(block => block.Layer, StringComparer.OrdinalIgnoreCase);
+            foreach (var sheet in sheets)
+            {
+                Repair(sheet.Name, false);
+                if (blocks[sheet.Layer].SingleOrDefault() is { } station)
+                    UpdateCornerTable(db, tr, GetLayout(db, tr, sheet.Name), station);
+            }
+        }
         if (HasOverview(db, tr)) Repair(OverviewName, true);
+        tr.Commit();
+    }
+
+    private static void UpdateCornerTable(Database db, Transaction tr, Layout layout, BlockReference station)
+    {
+        var layer = Layer(db, tr, CornerTableLayer);
+        var coordinates = NativeStationGeometry.StationCorners(station);
+        var cells = new List<(string Text, double X, double Y, double Height)>
+        {
+            ("Hoekpunten trafo (m)", 122, 31, 2.6),
+            ("Punt", 122, 25, 2.1), ("X", 137, 25, 2.1), ("Y", 160, 25, 2.1)
+        };
+        var culture = CultureInfo.GetCultureInfo("nl-NL");
+        for (var index = 0; index < coordinates.Length; index++)
+        {
+            var y = 20 - 4 * index;
+            cells.Add(($"C{index + 1}", 122, y, 2.1));
+            cells.Add((coordinates[index].X.ToString("F2", culture), 137, y, 2.1));
+            cells.Add((coordinates[index].Y.ToString("F2", culture), 160, y, 2.1));
+        }
+
+        var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+        var previous = space.Cast<ObjectId>().Where(id => IsLive(id) && id.ObjectClass.DxfName is "TEXT" or "LWPOLYLINE" or "LINE")
+            .Select(id => (Entity)tr.GetObject(id, OpenMode.ForRead)).Where(entity => entity.LayerId == layer).ToArray();
+        var texts = previous.OfType<DBText>().ToArray();
+        if (previous.Length == cells.Count + 2 && texts.Length == cells.Count && cells.All(cell =>
+            texts.Any(text => text.TextString == cell.Text && text.Position == new Point3d(cell.X, cell.Y, 0)))) return;
+
+        if (!space.IsWriteEnabled) space.UpgradeOpen();
+        foreach (var entity in previous)
+        {
+            if (!entity.IsWriteEnabled) entity.UpgradeOpen();
+            entity.Erase();
+        }
+        void Add(Entity entity)
+        {
+            entity.LayerId = layer;
+            space.AppendEntity(entity);
+            tr.AddNewlyCreatedDBObject(entity, true);
+        }
+
+        var border = new Polyline(4) { Closed = true };
+        var corners = new[] { new Point2d(119, 5), new Point2d(183, 5), new Point2d(183, 36), new Point2d(119, 36) };
+        for (var index = 0; index < corners.Length; index++) border.AddVertexAt(index, corners[index], 0, 0, 0);
+        Add(border);
+        Add(new Line(new Point3d(119, 23.5, 0), new Point3d(183, 23.5, 0)));
+        foreach (var cell in cells)
+            Add(new DBText { TextString = cell.Text, Height = cell.Height, Position = new Point3d(cell.X, cell.Y, 0) });
+    }
+
+    private static ObjectId NoteLayerId(LayerTable layers, StationSheet sheet) =>
+        layers.Has(sheet.Layer + NoteLayerSuffix) ? layers[sheet.Layer + NoteLayerSuffix] : ObjectId.Null;
+
+    internal static void AddMapNote(Document doc, StationSheet sheet, string text, Point3d position)
+    {
+        var db = doc.Database;
+        using var tr = db.TransactionManager.StartTransaction();
+        var station = LocationBlock(tr, ModelBlocks(db, tr), sheet);
+        var layer = Layer(db, tr, sheet.Layer + NoteLayerSuffix);
+        var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        var note = new DBText { TextString = text, Height = 0.55, Position = new Point3d(position.X, position.Y, station.Position.Z) };
+        note.SetDatabaseDefaults(db);
+        note.LayerId = layer;
+        note.ColorIndex = 1;
+        model.AppendEntity(note);
+        tr.AddNewlyCreatedDBObject(note, true);
+        var bounds = note.GeometricExtents;
+        var center = new Point2d(station.Position.X, station.Position.Y);
+        foreach (var x in new[] { bounds.MinPoint.X, bounds.MaxPoint.X })
+            foreach (var y in new[] { bounds.MinPoint.Y, bounds.MaxPoint.Y })
+                if (center.GetDistanceTo(new Point2d(x, y)) > MarkerRadius)
+                    throw new InvalidOperationException("Plaats de volledige tekst binnen de rode cirkel. Kies een ander punt of kort de tekst in.");
+
+        void SetVisibility(Layout layout, bool visible)
+        {
+            var viewport = FindMapViewport(tr, layout);
+            if (viewport == null || viewport.IsLayerFrozenInViewport(layer) != visible) return;
+            if (!viewport.IsWriteEnabled) viewport.UpgradeOpen();
+            if (visible) viewport.ThawLayersInViewport(new[] { layer }.GetEnumerator());
+            else viewport.FreezeLayersInViewport(new[] { layer }.GetEnumerator());
+        }
+
+        foreach (var other in ReadSheets(db, tr))
+            SetVisibility(GetLayout(db, tr, other.Name), other.Layer == sheet.Layer);
+        if (HasOverview(db, tr)) SetVisibility(GetLayout(db, tr, OverviewName), false);
+        var drawOrder = (DrawOrderTable)tr.GetObject(model.DrawOrderTableId, OpenMode.ForWrite);
+        drawOrder.MoveToTop(new ObjectIdCollection(new[] { note.ObjectId }));
         tr.Commit();
     }
 
@@ -405,9 +507,11 @@ internal static class StationLocationSheets
         if (layoutName != OverviewName && ReadSheets(db, tr).FirstOrDefault(sheet =>
             string.Equals(sheet.Name, layoutName, StringComparison.OrdinalIgnoreCase)) is { } location)
         {
-            Center(tr, viewport, LocationBlock(tr, ModelBlocks(db, tr), location).Position);
+            var station = LocationBlock(tr, ModelBlocks(db, tr), location);
+            Center(tr, viewport, station.Position);
+            UpdateCornerTable(db, tr, layout, station);
             var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-            IsolateViewport(viewport, layers[location.Layer], StationLayers(tr, layers));
+            IsolateViewport(viewport, layers[location.Layer], StationLayers(tr, layers), NoteLayerId(layers, location));
         }
         tr.Commit();
     }
@@ -424,6 +528,18 @@ internal static class StationLocationSheets
         {
             block.UpgradeOpen();
             block.Erase();
+        }
+        var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        var noteLayer = NoteLayerId(layers, sheet);
+        if (!noteLayer.IsNull)
+        {
+            var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+            foreach (var id in model.Cast<ObjectId>().Where(IsLive).ToArray())
+                if (tr.GetObject(id, OpenMode.ForRead) is DBText note && note.LayerId == noteLayer)
+                {
+                    note.UpgradeOpen();
+                    note.Erase();
+                }
         }
         RefreshMarkers(db, tr, sheet.Name);
         layouts.DeleteLayout(sheet.Name);
@@ -683,14 +799,14 @@ internal static class StationLocationSheets
             return name.StartsWith("TB_STATION_", StringComparison.OrdinalIgnoreCase) && name != PhotoLayer;
         }).ToArray();
 
-    private static void IsolateViewport(Viewport viewport, ObjectId own, ObjectId[] locations)
+    private static void IsolateViewport(Viewport viewport, ObjectId own, ObjectId[] locations, ObjectId noteLayer = default)
     {
-        var thawOwn = viewport.IsLayerFrozenInViewport(own);
-        var toFreeze = locations.Where(id => id != own && !viewport.IsLayerFrozenInViewport(id)).ToArray();
-        if (!thawOwn && toFreeze.Length == 0) return;
+        var toThaw = new[] { own, noteLayer }.Where(id => !id.IsNull && viewport.IsLayerFrozenInViewport(id)).ToArray();
+        var toFreeze = locations.Where(id => id != own && id != noteLayer && !viewport.IsLayerFrozenInViewport(id)).ToArray();
+        if (toThaw.Length == 0 && toFreeze.Length == 0) return;
         if (!viewport.IsWriteEnabled) viewport.UpgradeOpen();
-        if (thawOwn)
-            viewport.ThawLayersInViewport(new[] { own }.GetEnumerator());
+        if (toThaw.Length > 0)
+            viewport.ThawLayersInViewport(toThaw.GetEnumerator());
         if (toFreeze.Length > 0)
             viewport.FreezeLayersInViewport(toFreeze.GetEnumerator());
     }
@@ -711,7 +827,7 @@ internal static class StationLocationSheets
         }
         var blocks = stationBlocks.ToLookup(block => block.Layer, StringComparer.OrdinalIgnoreCase);
         var locations = sheets.Select(sheet => (Sheet: sheet, Block: RequireLocationBlock(blocks[sheet.Layer], sheet))).ToArray();
-        const double radius = 20;
+        const double radius = MarkerRadius;
         const double textHeight = 10;
         const double labelGap = 3;
         if (updateOverview && HasOverview(db, tr))
@@ -733,6 +849,9 @@ internal static class StationLocationSheets
                 var frozen = sheets.Select(sheet => layers[sheet.Layer]).Append(overviewLayer)
                     .Where(viewport.IsLayerFrozenInViewport).ToArray();
                 if (frozen.Length > 0) viewport.ThawLayersInViewport(frozen.GetEnumerator());
+                var notes = sheets.Select(sheet => NoteLayerId(layers, sheet))
+                    .Where(id => !id.IsNull && !viewport.IsLayerFrozenInViewport(id)).ToArray();
+                if (notes.Length > 0) viewport.FreezeLayersInViewport(notes.GetEnumerator());
                 SetAttributes(db, tr, layout, new Dictionary<string, string> { ["SCHAAL"] = "1:" + scale });
             }
         }
