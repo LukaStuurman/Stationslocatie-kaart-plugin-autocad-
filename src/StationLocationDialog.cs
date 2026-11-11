@@ -137,6 +137,14 @@ public sealed class Plugin
                             StationReferences.QueueCreate(doc, references.SelectedType, save.FileName);
                             return;
                         }
+                    case StationLocationAction.Signature:
+                        using (var signature = new StationSignatureDialog(StationLocationSheets.ReadSignatureLogo(doc.Database)))
+                            if (AcApp.ShowModalDialog(signature) == DialogResult.OK)
+                            {
+                                StationLocationSheets.ApplySignatureLogo(doc.Database, signature.SelectedKey);
+                                doc.Editor.Regen();
+                            }
+                        break;
                     case StationLocationAction.Client:
                         using (var clientDialog = new StationClientDialog(StationLocationSheets.ReadClient(doc.Database)))
                             if (AcApp.ShowModalDialog(clientDialog) == DialogResult.OK)
@@ -235,7 +243,7 @@ public sealed class Plugin
     }
 }
 
-internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview, Plot, Note, Blocks, Client, References }
+internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview, Plot, Note, Blocks, Client, References, Signature }
 
 internal sealed class StationLocationDialog : Form
 {
@@ -341,6 +349,7 @@ internal sealed class StationLocationDialog : Form
         var delete = Add("Locatie verwijderen", StationLocationAction.Delete, false);
         Group("Project");
         Add("Opdrachtgevers beheren", StationLocationAction.Client);
+        Add("Paraaflogo beheren", StationLocationAction.Signature);
         Add("Kaartreferenties maken", StationLocationAction.References);
         Add("Trafoblokken beheren", StationLocationAction.Blocks);
         Add("Alle bladen bewerken", StationLocationAction.EditAll, sheets.Count > 0);
@@ -355,6 +364,8 @@ internal sealed class StationLocationDialog : Form
         var close = new Button { Text = "Sluiten", Dock = DockStyle.Bottom, Height = 32, DialogResult = DialogResult.Cancel };
         sidebar.Controls.Add(actions);
         sidebar.Controls.Add(close);
+        sidebar.Controls.Add(new Label { Text = "Gemaakt door Luka Stuurman", Dock = DockStyle.Bottom, Height = 25,
+            ForeColor = StationTheme.Muted, TextAlign = ContentAlignment.MiddleCenter });
         layout.Controls.Add(sidebar, 1, 1);
         StationTheme.StyleButtons(sidebar, add, delete);
         CancelButton = close;

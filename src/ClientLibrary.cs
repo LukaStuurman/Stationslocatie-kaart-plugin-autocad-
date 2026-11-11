@@ -49,8 +49,9 @@ internal static class ClientLibrary
     internal static string LogoPath(string logo)
     {
         if (logo.Length == 0) return "";
-        if (logo != BuiltInLogo) return Path.Combine(Folder, logo);
-        using var stream = typeof(ClientLibrary).Assembly.GetManifestResourceStream("Timmermans.png");
+        var resource = logo switch { BuiltInLogo => "Timmermans.png", StationSignatureDialog.DefaultKey => "Techbase.png", _ => null };
+        if (resource == null) return Path.Combine(Folder, logo);
+        using var stream = typeof(ClientLibrary).Assembly.GetManifestResourceStream(resource);
         if (stream == null) return "";
         using var data = new MemoryStream();
         stream.CopyTo(data);

@@ -50,6 +50,8 @@ internal static class StationLocationSheets
     private const string CornerTableLayer = "STATIONLOCATIES_HOEKPUNTEN";
     private const string NoteLayerSuffix = "_KAARTOPMERKINGEN";
     internal const double MarkerRadius = 20;
+    private const string SignatureLayer = "STATIONLOCATIES_PARAAF";
+    private const string SignatureKey = "STATIONLOCATIES_PARAAFLOGO";
     private const string ClientLayer = "STATIONLOCATIES_OPDRACHTGEVER";
     private const string ClientKey = "STATIONLOCATIES_OPDRACHTGEVER";
     private const string PhotoLayer = "TB_STATION_FOTO";
@@ -263,6 +265,7 @@ internal static class StationLocationSheets
             step = "onderhoek invullen";
             ClearRevisions(db, tr, layout);
             if (ReadClient(db, tr) is { } client) WriteClient(db, tr, layout, client);
+            WriteSignatureLogo(db, tr, layout, ReadSignatureLogo(db, tr));
             SetAttributes(db, tr, layout, fields.Attributes());
             WriteSharedProject(db, tr, fields);
             step = "locatiefoto plaatsen";
@@ -341,6 +344,7 @@ internal static class StationLocationSheets
             });
             ClearRevisions(db, tr, overview);
             if (ReadClient(db, tr) is { } client) WriteClient(db, tr, overview, client);
+            WriteSignatureLogo(db, tr, overview, ReadSignatureLogo(db, tr));
             RefreshMarkers(db, tr, updateOverview: true);
             tr.Commit();
         }
@@ -368,12 +372,14 @@ internal static class StationLocationSheets
     internal static void RepairExistingSheets(Database db)
     {
         using var tr = db.TransactionManager.StartTransaction();
+        var signature = ReadSignatureLogo(db, tr);
         void Repair(string name, bool overview)
         {
             var layout = GetLayout(db, tr, name);
             DisableLayoutGrid(tr, layout);
             NativeStationGeometry.RepairFreeSpaceLegend(tr, layout, overview);
             NativeStationGeometry.RemoveStrayLegendPolyline(tr, layout);
+            WriteSignatureLogo(db, tr, layout, signature);
         }
 
         var sheets = ReadSheets(db, tr);
@@ -1136,6 +1142,70 @@ internal static class StationLocationSheets
             if (!oldPhoto.IsWriteEnabled) oldPhoto.UpgradeOpen();
             oldPhoto.Erase();
         }
+    }
+
+    internal static string ReadSignatureLogo(Database db)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        return ReadSignatureLogo(db, tr);
+    }
+
+    private static string ReadSignatureLogo(Database db, Transaction tr)
+    {
+        var dictionary = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+        if (!dictionary.Contains(SignatureKey)) return StationSignatureDialog.DefaultKey;
+        var record = (Xrecord)tr.GetObject(dictionary.GetAt(SignatureKey), OpenMode.ForRead);
+        using var data = record.Data;
+        return data?.AsArray().FirstOrDefault().Value as string ?? StationSignatureDialog.DefaultKey;
+    }
+
+    internal static void ApplySignatureLogo(Database db, string logo)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        var dictionary = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForWrite);
+        Xrecord record;
+        if (dictionary.Contains(SignatureKey))
+            record = (Xrecord)tr.GetObject(dictionary.GetAt(SignatureKey), OpenMode.ForWrite);
+        else
+        {
+            record = new Xrecord();
+            dictionary.SetAt(SignatureKey, record);
+            tr.AddNewlyCreatedDBObject(record, true);
+        }
+        using var data = new ResultBuffer(new TypedValue(1, logo));
+        record.Data = data;
+
+        foreach (var sheet in ReadSheets(db, tr)) WriteSignatureLogo(db, tr, GetLayout(db, tr, sheet.Name), logo);
+        if (HasOverview(db, tr)) WriteSignatureLogo(db, tr, GetLayout(db, tr, OverviewName), logo);
+        tr.Commit();
+    }
+
+    private static void WriteSignatureLogo(Database db, Transaction tr, Layout layout, string key)
+    {
+        var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        var previous = layers.Has(SignatureLayer)
+            ? Entities(tr, layout).OfType<RasterImage>().Where(image => image.LayerId == layers[SignatureLayer]).ToArray()
+            : [];
+        var path = ClientLibrary.LogoPath(key);
+        if (path.Length > 0 && !File.Exists(path))
+            throw new FileNotFoundException("Het opgeslagen paraaflogo ontbreekt.", path);
+        if (path.Length > 0 && previous.Length == 1 &&
+            string.Equals(PhotoPath(tr, previous[0], out _), path, StringComparison.OrdinalIgnoreCase)) return;
+
+        foreach (var old in previous)
+        {
+            if (!old.IsWriteEnabled) old.UpgradeOpen();
+            old.Erase();
+        }
+        if (path.Length == 0) return;
+
+        using var logo = System.Drawing.Image.FromFile(path);
+        var scale = Math.Min(27.0 / logo.Width, 8.0 / logo.Height);
+        var width = logo.Width * scale;
+        var height = logo.Height * scale;
+        var origin = Title(tr, layout).Position;
+        var frame = new PhotoFrame(origin.X + 377.45 + (27 - width) / 2, origin.Y + 35.08 - height / 2, width, height);
+        AttachPhoto(db, tr, layout, path, path, frame, SignatureLayer);
     }
 
     internal static ClientProfile? ReadClient(Database db)
