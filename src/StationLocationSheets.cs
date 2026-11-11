@@ -624,7 +624,7 @@ internal static class StationLocationSheets
         }
     }
 
-    internal static void OpenSheet(Document doc, string layoutName)
+    internal static void OpenSheet(Document doc, string layoutName, bool fitPaper = true)
     {
         LayoutManager.Current.CurrentLayout = layoutName;
         if (Convert.ToInt32(Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("CVPORT")) != 1)
@@ -651,6 +651,7 @@ internal static class StationLocationSheets
             IsolateViewport(viewport, layers[location.Layer], StationLayers(tr, layers), NoteLayerId(layers, location));
         }
         tr.Commit();
+        if (fitPaper) doc.Editor.Command("_.ZOOM", "_Extents");
     }
 
     internal static void Delete(Document doc, StationSheet sheet)

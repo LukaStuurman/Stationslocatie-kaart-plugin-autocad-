@@ -172,7 +172,7 @@ internal static class StationPlot
             {
                 current = layoutName;
                 doc.Editor.WriteMessage($"\nPlotten {written + 1}/{options.Layouts.Length}  {layoutName}\n");
-                StationLocationSheets.OpenSheet(doc, layoutName);
+                StationLocationSheets.OpenSheet(doc, layoutName, fitPaper: false);
                 doc.Editor.Regen();
                 using var settings = CreateSettings(doc.Database, layoutName, options);
                 var stem = Path.Combine(staging.FullName, $"Blad-{written + 1:D4}");
