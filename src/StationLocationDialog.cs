@@ -127,12 +127,22 @@ public sealed class Plugin
                             }
 
                             string? klicFolder = null;
-                            if (references.Kind == MapKind.KLIC)
+                            if (references.Kind == MapKind.KLIC || references.CreateAll)
                             {
                                 using var folder = new FolderBrowserDialog { Description = "Kies de map van de uitgepakte KLIC-levering",
                                     UseDescriptionForTitle = true, ShowNewFolderButton = false };
                                 if (folder.ShowDialog() != DialogResult.OK) break;
                                 klicFolder = folder.SelectedPath;
+                            }
+                            if (references.CreateAll)
+                            {
+                                using var output = new FolderBrowserDialog { Description = "Kies de uitvoermap voor KLIC, Topo en Percelen",
+                                    UseDescriptionForTitle = true };
+                                if (Path.IsPathFullyQualified(doc.Database.Filename))
+                                    output.InitialDirectory = Path.GetDirectoryName(doc.Database.Filename) ?? "";
+                                if (output.ShowDialog() != DialogResult.OK) break;
+                                StationReferences.QueueAll(doc, output.SelectedPath, klicFolder!);
+                                return;
                             }
                             using var save = new SaveFileDialog { Filter = filter, DefaultExt = "dwg",
                                 FileName = references.Kind + " " + Path.GetFileNameWithoutExtension(doc.Name) + ".dwg" };

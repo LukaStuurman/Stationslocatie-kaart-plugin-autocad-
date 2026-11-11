@@ -31,7 +31,34 @@ internal static partial class StationTopo
     ];
 
     internal static TopoData Download(ParcelArea area, CancellationToken cancellation) =>
-        DownloadAsync(area, cancellation).GetAwaiter().GetResult();
+        DownloadTiles(area, cancellation).GetAwaiter().GetResult();
+
+    private static async Task<TopoData> DownloadTiles(ParcelArea area, CancellationToken cancellation)
+    {
+        var tiles = await area.FetchTiles(2000, DownloadAsync, cancellation).ConfigureAwait(false);
+        var shapes = tiles.SelectMany(tile => tile.Shapes).Distinct(new ShapeComparer()).ToArray();
+        var labels = tiles.SelectMany(tile => tile.Labels).Distinct().ToArray();
+        if (shapes.Length == 0 && labels.Length == 0)
+            throw new IOException("PDOK leverde geen actuele BGT-objecten in dit gebied.");
+        return new(shapes, labels);
+    }
+
+    private sealed class ShapeComparer : IEqualityComparer<TopoShape>
+    {
+        public bool Equals(TopoShape? a, TopoShape? b) => ReferenceEquals(a, b) ||
+            a != null && b != null && a.Style == b.Style && a.Source == b.Source && a.Closed == b.Closed &&
+            a.Vertices.AsSpan().SequenceEqual(b.Vertices);
+
+        public int GetHashCode(TopoShape shape)
+        {
+            var hash = new HashCode();
+            hash.Add(shape.Style);
+            hash.Add(shape.Source);
+            hash.Add(shape.Closed);
+            foreach (var vertex in shape.Vertices) hash.Add(vertex);
+            return hash.ToHashCode();
+        }
+    }
 
     private static async Task<TopoData> DownloadAsync(ParcelArea area, CancellationToken cancellation)
     {
@@ -45,7 +72,7 @@ internal static partial class StationTopo
         {
             await Task.Delay(TimeSpan.FromSeconds(5), cancellation).ConfigureAwait(false);
             using var reply = await Http.GetAsync(statusUrl, cancellation).ConfigureAwait(false);
-            if ((int)reply.StatusCode == 429) continue;
+            if ((int)reply.StatusCode is 408 or 429 or 500 or 502 or 503 or 504) continue;
             using var status = await ReadJson(reply, cancellation).ConfigureAwait(false);
             switch (status.RootElement.GetProperty("status").GetString())
             {
@@ -80,7 +107,7 @@ internal static partial class StationTopo
         }
         archiveFile.Position = 0;
         using var archive = new ZipArchive(archiveFile, ZipArchiveMode.Read);
-        return ReadArchive(archive, area, cancellation);
+        return ReadArchive(archive, area, cancellation, allowEmpty: true);
     }
 
     private static Uri Link(JsonElement response, string name)
@@ -99,7 +126,7 @@ internal static partial class StationTopo
         return await JsonDocument.ParseAsync(stream, cancellationToken: cancellation).ConfigureAwait(false);
     }
 
-    internal static TopoData ReadArchive(ZipArchive archive, ParcelArea area, CancellationToken cancellation)
+    internal static TopoData ReadArchive(ZipArchive archive, ParcelArea area, CancellationToken cancellation, bool allowEmpty = false)
     {
         var shapes = new List<TopoShape>();
         var labels = new List<TopoLabel>();
@@ -132,7 +159,7 @@ internal static partial class StationTopo
                 ReadLabels(feature, metadata, area, labels);
             }
         }
-        if (shapes.Count == 0 && labels.Count == 0) throw new IOException("PDOK leverde geen actuele BGT-objecten in dit gebied.");
+        if (!allowEmpty && shapes.Count == 0 && labels.Count == 0) throw new IOException("PDOK leverde geen actuele BGT-objecten in dit gebied.");
         return new(shapes, labels);
     }
 

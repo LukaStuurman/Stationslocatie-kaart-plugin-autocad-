@@ -7,6 +7,7 @@ internal sealed class StationReferenceDialog : Form
     private readonly ComboBox kind = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 240 };
     internal MapKind Kind => (MapKind)kind.SelectedItem!;
     internal bool AttachExisting { get; private set; }
+    internal bool CreateAll { get; private set; }
 
     internal StationReferenceDialog()
     {
@@ -32,8 +33,10 @@ internal sealed class StationReferenceDialog : Form
         var create = new Button { Text = "Xref-DWG maken", AutoSize = true, DialogResult = DialogResult.OK };
         var attach = new Button { Text = "Bestaande DWG koppelen", AutoSize = true };
         attach.Click += (_, _) => { AttachExisting = true; DialogResult = DialogResult.OK; };
+        var all = new Button { Text = "Alle drie maken", AutoSize = true };
+        all.Click += (_, _) => { CreateAll = true; DialogResult = DialogResult.OK; };
         var cancel = new Button { Text = "Annuleren", AutoSize = true, DialogResult = DialogResult.Cancel };
-        actions.Controls.AddRange([create, attach, cancel]);
+        actions.Controls.AddRange([create, all, attach, cancel]);
         panel.Controls.Add(actions);
         Controls.Add(panel);
         CancelButton = cancel;

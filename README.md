@@ -40,6 +40,10 @@ Kies **Bladen plotten**, vink de gewenste layouts aan en stel de PDF-plotter, he
 
 Kies **Kaartreferenties maken → KLIC → Xref-DWG maken** en selecteer de map van één uitgepakte KLIC-levering. De plug-in leest de gebiedsinformatielevering en koppelt de gemaakte DWG als XREF op RD-coördinaten. Een voorbeeld-DWG is tijdens het importeren niet nodig.
 
+Kies **Alle drie maken** om ook Topo en Percelen op te halen. Selecteer één KLIC-map en één uitvoermap. De uiterste RD-coördinaten van de geïmporteerde KLIC-geometrie bepalen het aanvraaggebied voor beide PDOK-kaarten. De drie DWG's worden apart opgeslagen en samen als XREF gekoppeld.
+
+Grote aanvraaggebieden worden voor PDOK automatisch in kleinere rechthoeken verdeeld. De resultaten worden per kaart samengevoegd tot één DWG.
+
 De tekenregels zijn afgeleid van een InfraCAD-referentie en gebruiken de daarin aangetroffen NLCS-lagen, lijnpatronen en blokdefinities. Voor de weergave van de complexe lijntypen en de NLCS-tekststijl moet AutoCAD `NLCS.SHX` en `NLCS-ISO.ttf` kunnen vinden. Het AutoCAD-opdrachtvenster meldt objecten waarvoor geen tekenregel beschikbaar is.
 
 ## Bouwen

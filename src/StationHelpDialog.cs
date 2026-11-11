@@ -54,7 +54,7 @@ internal sealed class StationHelpDialog : Form
 
             Opdrachtgevers beheren en Paraaflogo beheren — beheer de opgeslagen gegevens en logo’s voor de onderhoek.
 
-            Kaartreferenties maken — maak externe DWG-referenties voor topografie, perceelgrenzen of een uitgepakte KLIC-levering.
+            Kaartreferenties maken — maak externe DWG-referenties voor topografie, perceelgrenzen of een uitgepakte KLIC-levering. Met Alle drie maken bepaalt de KLIC automatisch het kaartgebied voor Topo en Percelen.
 
             Totaal maken of Totaal vernieuwen — maak of herbereken het overzicht en de kaartuitsnede wanneer je op deze knop klikt.
 
