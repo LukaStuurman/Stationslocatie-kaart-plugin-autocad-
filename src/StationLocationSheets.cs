@@ -6,7 +6,7 @@ using Autodesk.AutoCAD.Geometry;
 
 namespace Stationslocaties;
 
-internal sealed record StationSheet(string Name, int Number, int Alternative, string Layer);
+internal sealed record StationSheet(string Name, string Trafo, int Alternative, string Layer);
 internal sealed record StationSheetChange(StationSheet Before, StationSheet After);
 internal sealed record StationEditPlan(StationSheet Target, StationSheetChange[] Changes);
 
@@ -55,7 +55,8 @@ internal static class StationLocationSheets
     internal static List<StationSheet> List(Database db)
     {
         using var tr = db.TransactionManager.StartTransaction();
-        return ReadSheets(db, tr).OrderBy(sheet => sheet.Number).ThenBy(sheet => sheet.Alternative).ToList();
+        return ReadSheets(db, tr).OrderBy(sheet => int.TryParse(sheet.Trafo, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : int.MaxValue)
+            .ThenBy(sheet => sheet.Trafo, StringComparer.OrdinalIgnoreCase).ThenBy(sheet => sheet.Alternative).ToList();
     }
 
     internal static HashSet<string> SheetsWithPhoto(Database db, IReadOnlyList<StationSheet> sheets)
@@ -68,43 +69,53 @@ internal static class StationLocationSheets
         }).Select(sheet => sheet.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
-    internal static StationSheet Next(Database db, int number, bool preferred)
+    internal static StationSheet Next(Database db, string trafo, bool preferred)
     {
-        var sameStation = List(db).Where(sheet => sheet.Number == number).ToArray();
+        var sameStation = List(db).Where(sheet => SameTrafo(sheet.Trafo, trafo)).ToArray();
         if (preferred && sameStation.Any(sheet => sheet.Alternative == 0))
-            throw new InvalidOperationException($"Trafo {number} heeft al een voorkeurslocatie.");
+            throw new InvalidOperationException($"{TrafoLabel(trafo)} heeft al een voorkeurslocatie.");
         var alternative = preferred ? 0 : sameStation.Select(sheet => sheet.Alternative).DefaultIfEmpty().Max() + 1;
         var suffix = SheetSuffix(alternative);
-        var baseLayer = "TB_STATION_" + number + "_" + suffix;
+        var baseLayer = "TB_STATION_" + (int.TryParse(trafo, NumberStyles.None, CultureInfo.InvariantCulture, out _) ? trafo : "LOCATIE") + "_" + suffix;
         using var tr = db.TransactionManager.StartTransaction();
         var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
         var layer = baseLayer;
         for (var serial = 2; layers.Has(layer); serial++) layer = baseLayer + "_" + serial;
-        return new($"Trafo {number} {suffix}", number, alternative, layer);
+        return new($"{TrafoLabel(trafo)} {suffix}", trafo, alternative, layer);
     }
+
+    internal static bool SameTrafo(string first, string second) =>
+        string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
+
+    internal static string TrafoLabel(string trafo) =>
+        int.TryParse(trafo, NumberStyles.None, CultureInfo.InvariantCulture, out _) ? $"Trafo {trafo}" : trafo;
+
+    internal static bool IsValidTrafo(string trafo) =>
+        trafo.Length is > 0 and <= 60 && !trafo.Any(char.IsControl) &&
+        trafo.IndexOfAny(['<', '>', '/', '\\', '"', ':', ';', '?', '*', '|', '=', ',', '{', '}', '%']) < 0;
 
     private static string SheetSuffix(int alternative) => alternative switch { 0 => "VL", 1 => "AL", _ => "AL" + alternative };
 
-    internal static StationEditPlan PlanEdit(IReadOnlyList<StationSheet> sheets, StationSheet sheet, int number, bool preferred, int alternativeNumber)
+    internal static StationEditPlan PlanEdit(IReadOnlyList<StationSheet> sheets, StationSheet sheet, string trafo, bool preferred, int alternativeNumber)
     {
         if (!sheets.Contains(sheet))
             throw new InvalidOperationException("De geselecteerde locatie is gewijzigd of verwijderd.");
         var requested = preferred ? 0 : alternativeNumber;
-        if (sheet.Number == number && sheet.Alternative == requested)
+        if (sheet.Trafo == trafo && sheet.Alternative == requested)
             return new(sheet, []);
 
-        var others = sheets.Where(item => item.Number == number && item != sheet).ToArray();
+        var others = sheets.Where(item => SameTrafo(item.Trafo, trafo) && item != sheet).ToArray();
         if (!preferred && others.Any(item => item.Alternative == requested))
-            throw new InvalidOperationException($"Er bestaat al een locatie met de naam Trafo {number} {SheetSuffix(requested)}.");
+            throw new InvalidOperationException($"Er bestaat al een locatie met de naam {TrafoLabel(trafo)} {SheetSuffix(requested)}.");
 
         StationSheet Change(StationSheet old, int alternative) =>
-            old with { Number = number, Alternative = alternative, Name = $"Trafo {number} {SheetSuffix(alternative)}" };
+            old with { Trafo = trafo, Alternative = alternative, Name = $"{TrafoLabel(trafo)} {SheetSuffix(alternative)}" };
 
         var target = Change(sheet, requested);
         var changes = new List<StationSheetChange> { new(sheet, target) };
         if (preferred && others.FirstOrDefault(item => item.Alternative == 0) is { } incumbent)
         {
-            var alternative = sheet.Number == number && sheet.Alternative > 0 ? sheet.Alternative
+            var alternative = SameTrafo(sheet.Trafo, trafo) && sheet.Alternative > 0 ? sheet.Alternative
                 : others.Select(item => item.Alternative).DefaultIfEmpty().Max() + 1;
             changes.Add(new(incumbent, Change(incumbent, alternative)));
         }
@@ -112,7 +123,7 @@ internal static class StationLocationSheets
     }
 
     internal static string DefaultDrawingNumber(StationSheet sheet) =>
-        $"{sheet.Number} - " + (sheet.Alternative == 0 ? "Voorkeurslocatie"
+        $"{sheet.Trafo} - " + (sheet.Alternative == 0 ? "Voorkeurslocatie"
             : "Alternatieve locatie" + (sheet.Alternative > 1 ? " " + sheet.Alternative : ""));
 
     internal static StationFields ReadFields(Database db, StationSheet sheet)
@@ -785,7 +796,7 @@ internal static class StationLocationSheets
             tr.AddNewlyCreatedDBObject(app, true);
         }
         using var data = new ResultBuffer(new TypedValue(1001, Tag),
-            new TypedValue(1071, sheet.Number), new TypedValue(1071, sheet.Alternative), new TypedValue(1000, sheet.Layer));
+            new TypedValue(1000, sheet.Trafo), new TypedValue(1071, sheet.Alternative), new TypedValue(1000, sheet.Layer));
         layout.XData = data;
     }
 
@@ -800,7 +811,7 @@ internal static class StationLocationSheets
             using var data = layout.GetXDataForApplication(Tag);
             var values = data?.AsArray();
             if (values?.Length != 4) continue;
-            result.Add(new(layout.LayoutName, Convert.ToInt32(values[1].Value, CultureInfo.InvariantCulture),
+            result.Add(new(layout.LayoutName, Convert.ToString(values[1].Value, CultureInfo.InvariantCulture) ?? "",
                 Convert.ToInt32(values[2].Value, CultureInfo.InvariantCulture), (string)values[3].Value));
         }
         return result;

@@ -40,12 +40,13 @@ public sealed class Plugin
                         {
                             Date = StationFields.Today, Address = "", Notes = "", DrawingNumber = "", Photo = ""
                         }, adding: true,
-                            number: selected?.Number ?? 1, preferred: !sheets.Any(s => s.Number == (selected?.Number ?? 1) && s.Alternative == 0),
+                            trafo: selected?.Trafo ?? "1", preferred: !sheets.Any(s =>
+                                StationLocationSheets.SameTrafo(s.Trafo, selected?.Trafo ?? "1") && s.Alternative == 0),
                             photoFolder: StationLocationSheets.PhotoFolder(doc.Database),
-                            existingPreferred: sheets.Where(s => s.Alternative == 0).Select(s => s.Number).ToHashSet()))
+                            existingPreferred: sheets.Where(s => s.Alternative == 0).Select(s => s.Trafo).ToHashSet(StringComparer.OrdinalIgnoreCase)))
                         {
                             if (AcApp.ShowModalDialog(input) != DialogResult.OK) break;
-                            var sheet = StationLocationSheets.Next(doc.Database, input.Number, input.Preferred);
+                            var sheet = StationLocationSheets.Next(doc.Database, input.Trafo, input.Preferred);
                             var fields = input.Fields;
                             if (string.IsNullOrWhiteSpace(fields.DrawingNumber))
                                 fields = fields with { DrawingNumber = StationLocationSheets.DefaultDrawingNumber(sheet) };
@@ -68,12 +69,12 @@ public sealed class Plugin
                     case StationLocationAction.Edit when selected != null:
                         using (var input = new StationFieldsDialog(StationLocationSheets.ReadFields(doc.Database, selected)
                             .FillSharedFrom(StationLocationSheets.ProjectFields(doc.Database)),
-                            number: selected.Number, preferred: selected.Alternative == 0, alternativeNumber: selected.Alternative,
+                            trafo: selected.Trafo, preferred: selected.Alternative == 0, alternativeNumber: selected.Alternative,
                             photoFolder: StationLocationSheets.PhotoFolder(doc.Database),
                             locate: () => StationLocationSheets.Position(doc.Database, selected)))
                             if (AcApp.ShowModalDialog(input) == DialogResult.OK)
                             {
-                                var plan = StationLocationSheets.PlanEdit(sheets, selected, input.Number, input.Preferred, input.AlternativeNumber);
+                                var plan = StationLocationSheets.PlanEdit(sheets, selected, input.Trafo, input.Preferred, input.AlternativeNumber);
                                 if (plan.Changes.Length > 1)
                                 {
                                     var other = plan.Changes[1];
@@ -144,6 +145,7 @@ internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open,
 
 internal sealed class StationLocationDialog : Form
 {
+    private readonly ToolTip toolTips = new();
     private readonly ListView locations = new() { View = View.Details, Dock = DockStyle.Fill, FullRowSelect = true, MultiSelect = false, HideSelection = false };
     internal StationSheet? Selected => locations.SelectedItems.Count == 1 ? (StationSheet?)locations.SelectedItems[0].Tag : null;
     internal StationLocationAction Action { get; private set; }
@@ -163,9 +165,9 @@ internal sealed class StationLocationDialog : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 242));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var incomplete = sheets.GroupBy(sheet => sheet.Number).Where(group =>
+        var incomplete = sheets.GroupBy(sheet => sheet.Trafo, StringComparer.OrdinalIgnoreCase).Where(group =>
             !group.Any(sheet => sheet.Alternative == 0) || !group.Any(sheet => sheet.Alternative > 0))
-            .Select(group => "Trafo " + group.Key);
+            .Select(group => StationLocationSheets.TrafoLabel(group.Key));
         var pending = string.Join(", ", incomplete);
         var message = sheets.Count == 0
             ? "Begin met een voorkeurslocatie (VL). Voeg daarna één of meer alternatieve locaties (AL) toe."
@@ -247,7 +249,11 @@ internal sealed class StationLocationDialog : Form
         Add("Projectgegevens", StationLocationAction.Project, sheets.Count > 0);
         Group("Uitvoer");
         Add(hasOverview ? "Totaal vernieuwen" : "Totaal maken", StationLocationAction.Overview, sheets.Count > 0 || hasOverview);
-        Add("Bladen plotten", StationLocationAction.Plot, sheets.Count > 0 || hasOverview);
+        var plot = Add("\uE749", StationLocationAction.Plot, sheets.Count > 0 || hasOverview);
+        plot.Font = new Font("Segoe MDL2 Assets", 14F);
+        plot.TextAlign = ContentAlignment.MiddleCenter;
+        plot.AccessibleName = "Bladen plotten";
+        toolTips.SetToolTip(plot, "Bladen plotten");
         var close = new Button { Text = "Sluiten", Dock = DockStyle.Bottom, Height = 32, DialogResult = DialogResult.Cancel };
         sidebar.Controls.Add(actions);
         sidebar.Controls.Add(close);
@@ -262,6 +268,12 @@ internal sealed class StationLocationDialog : Form
         Controls.Add(layout);
     }
 
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) toolTips.Dispose();
+        base.Dispose(disposing);
+    }
+
     private void Choose(StationLocationAction action)
     {
         Action = action;
@@ -273,7 +285,7 @@ internal sealed class StationLocationDialog : Form
 internal sealed class StationFieldsDialog : Form
 {
     private readonly Dictionary<string, TextBox> fields = new();
-    private readonly NumericUpDown number = new() { Minimum = 1, Maximum = 999999, Width = 90 };
+    private readonly TextBox trafoName = new() { Width = 280, MaxLength = 60 };
     private readonly ComboBox kind = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
     private readonly StationFields original;
     private readonly string photoFolder;
@@ -281,7 +293,7 @@ internal sealed class StationFieldsDialog : Form
     private readonly CheckBox lookupAddress = new() { Text = "Leeg adres automatisch opzoeken bij PDOK", Checked = true, AutoSize = true };
     private readonly TableLayoutPanel grid = new() { Dock = DockStyle.Fill, ColumnCount = 3, AutoScroll = true, Padding = new Padding(12) };
     private int row;
-    internal int Number => (int)number.Value;
+    internal string Trafo => trafoName.Text.Trim();
     private readonly TextBox alternative = new() { Width = 230, PlaceholderText = "Leeg voor AL, of vul 2 of hoger in" };
     internal bool Preferred => kind.SelectedIndex == 0;
     internal int AlternativeNumber { get; private set; } = 1;
@@ -293,7 +305,7 @@ internal sealed class StationFieldsDialog : Form
         Value("Tekeningnummer", original.DrawingNumber), Value("Locatiefoto", original.Photo));
 
     internal StationFieldsDialog(StationFields initial, bool adding = false, bool project = false,
-        int number = 1, bool preferred = true, string photoFolder = "", HashSet<int>? existingPreferred = null,
+        string trafo = "1", bool preferred = true, string photoFolder = "", HashSet<string>? existingPreferred = null,
         Func<Point3d>? locate = null, bool showOverviewFields = true, int alternativeNumber = 0)
     {
         original = initial;
@@ -314,11 +326,11 @@ internal sealed class StationFieldsDialog : Form
         if (!project)
         {
             Heading("Stationlocatie");
-            this.number.Value = number;
+            trafoName.Text = trafo;
             kind.Items.AddRange(new[] { "VL – Voorkeurslocatie", "AL – Alternatieve locatie" });
             kind.SelectedIndex = preferred ? 0 : 1;
-            if (adding) this.number.ValueChanged += (_, _) => kind.SelectedIndex = existingPreferred?.Contains(Number) == true ? 1 : 0;
-            Row("Trafo-nummer", this.number);
+            if (adding) trafoName.TextChanged += (_, _) => kind.SelectedIndex = existingPreferred?.Contains(Trafo) == true ? 1 : 0;
+            Row("Trafonaam of nummer", trafoName);
             Row("Locatietype", kind);
             if (!adding)
             {
@@ -372,6 +384,12 @@ internal sealed class StationFieldsDialog : Form
         var ok = new Button { Text = adding ? "Plaatsen op kaart" : "Opslaan", AutoSize = true };
         ok.Click += (_, _) =>
         {
+            if (!project && !StationLocationSheets.IsValidTrafo(Trafo))
+            {
+                MessageBox.Show(this, "Vul een trafonaam of nummer in. Gebruik letters, cijfers, spaties, streepjes of andere tekens die in een bladnaam zijn toegestaan.", Text);
+                trafoName.Focus();
+                return;
+            }
             var suffix = alternative.Text.Trim();
             var parsed = 1;
             if (!adding && !project && !Preferred && suffix.Length > 0 &&
