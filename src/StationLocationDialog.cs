@@ -14,6 +14,21 @@ namespace Stationslocaties;
 
 public sealed class Plugin
 {
+    [CommandMethod("STATIONXREFSTART", CommandFlags.Session)]
+    public void StartStationReference() => RunReferenceCommand(StationReferences.Start);
+
+    [CommandMethod("STATIONXREFKLAAR", CommandFlags.Session)]
+    public void FinishStationReference() => RunReferenceCommand(StationReferences.Finish);
+
+    private static void RunReferenceCommand(Action run)
+    {
+        try { run(); }
+        catch (System.Exception ex)
+        {
+            AcApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\nKaartreferentie: " + ex.Message);
+        }
+    }
+
     [CommandMethod("STATIONLOCATIES", CommandFlags.Modal)]
     public void ShowStationLocations()
     {
@@ -98,6 +113,30 @@ public sealed class Plugin
                                 doc.Editor.Regen();
                             }
                         break;
+                    case StationLocationAction.References:
+                        using (var references = new StationReferenceDialog())
+                        {
+                            if (AcApp.ShowModalDialog(references) != DialogResult.OK) break;
+                            const string filter = "AutoCAD-tekening (*.dwg)|*.dwg";
+                            if (references.AttachExisting)
+                            {
+                                using var open = new OpenFileDialog { Filter = filter, CheckFileExists = true };
+                                if (open.ShowDialog() == DialogResult.OK)
+                                {
+                                    StationReferences.Attach(doc, open.FileName);
+                                    doc.Editor.Regen();
+                                }
+                                break;
+                            }
+
+                            using var save = new SaveFileDialog { Filter = filter, DefaultExt = "dwg",
+                                FileName = references.SelectedType.Name + " " + Path.GetFileNameWithoutExtension(doc.Name) + ".dwg" };
+                            if (Path.IsPathFullyQualified(doc.Database.Filename))
+                                save.InitialDirectory = Path.GetDirectoryName(doc.Database.Filename);
+                            if (save.ShowDialog() != DialogResult.OK) break;
+                            StationReferences.QueueCreate(doc, references.SelectedType, save.FileName);
+                            return;
+                        }
                     case StationLocationAction.Client:
                         using (var clientDialog = new StationClientDialog(StationLocationSheets.ReadClient(doc.Database)))
                             if (AcApp.ShowModalDialog(clientDialog) == DialogResult.OK)
@@ -196,7 +235,7 @@ public sealed class Plugin
     }
 }
 
-internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview, Plot, Note, Blocks, Client }
+internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview, Plot, Note, Blocks, Client, References }
 
 internal sealed class StationLocationDialog : Form
 {
@@ -302,6 +341,7 @@ internal sealed class StationLocationDialog : Form
         var delete = Add("Locatie verwijderen", StationLocationAction.Delete, false);
         Group("Project");
         Add("Opdrachtgevers beheren", StationLocationAction.Client);
+        Add("Kaartreferenties maken", StationLocationAction.References);
         Add("Trafoblokken beheren", StationLocationAction.Blocks);
         Add("Alle bladen bewerken", StationLocationAction.EditAll, sheets.Count > 0);
         Add("Projectgegevens", StationLocationAction.Project, sheets.Count > 0);

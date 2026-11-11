@@ -40,6 +40,7 @@ public sealed class StationTableUpdates : IExtensionApplication
 
     private void DocumentToBeDestroyed(object sender, DocumentCollectionEventArgs args)
     {
+        StationReferences.Forget(args.Document);
         var database = args.Document.Database;
         if (pending.Remove(database)) database.ObjectModified -= StationModified;
     }

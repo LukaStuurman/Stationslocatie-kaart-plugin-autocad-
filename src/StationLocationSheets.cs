@@ -479,7 +479,9 @@ internal static class StationLocationSheets
 
     private static void UpdateCornerTable(Database db, Transaction tr, Layout layout, BlockReference station, bool show)
     {
-        var coordinates = !show ? [] : BlockName(tr, station) == Symbol
+        var standardBlock = BlockName(tr, station) == Symbol;
+        if (!standardBlock) StationBlockLibrary.EnsureCornerArrows(tr, station);
+        var coordinates = !show ? [] : standardBlock
             ? NativeStationGeometry.StationCorners(station)
             : StationBlockLibrary.Corners(tr, station);
         var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);

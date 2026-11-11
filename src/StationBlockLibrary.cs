@@ -22,6 +22,7 @@ internal sealed record StationBlockCatalog(StationBlockChoice[] Blocks, Guid? De
 internal static class StationBlockLibrary
 {
     internal const string DefinitionPrefix = "TB_TRAFO_BIB_";
+    private const string ArrowKey = "STATIONLOCATIES_C1_C4_PIJLEN";
     private const string CornerKey = "STATIONLOCATIES_C1_C4";
     private static string Folder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Stationlocaties", "Trafoblokken");
@@ -115,6 +116,7 @@ internal static class StationBlockLibrary
             var definition = (BlockTableRecord)tr.GetObject(mapping[sourceId].Value, OpenMode.ForWrite);
             definition.Name = choice.DefinitionName;
             WriteCorners(tr, definition, points);
+            EnsureCornerArrows(tr, definition);
             tr.Commit();
         }
 
@@ -170,15 +172,64 @@ internal static class StationBlockLibrary
         tr.AddNewlyCreatedDBObject(record, true);
     }
 
+    internal static void EnsureCornerArrows(Transaction tr, BlockReference station) =>
+        EnsureCornerArrows(tr, (BlockTableRecord)tr.GetObject(station.BlockTableRecord, OpenMode.ForRead));
+
+    private static void EnsureCornerArrows(Transaction tr, BlockTableRecord definition)
+    {
+        if (definition.ExtensionDictionary.IsNull) return;
+        var dictionary = (DBDictionary)tr.GetObject(definition.ExtensionDictionary, OpenMode.ForRead);
+        if (dictionary.Contains(ArrowKey)) return;
+        var corners = ReadCorners(tr, definition);
+        if (corners.Length != 4) return;
+        var points = corners.Select(point => new Point3d(point.X, point.Y, corners[0].Z)).ToArray();
+        var center = new Point3d(points.Average(point => point.X), points.Average(point => point.Y), points[0].Z);
+        var spacing = points.SelectMany((point, index) => points.Skip(index + 1).Select(other => point.DistanceTo(other))).Min();
+        if (spacing <= 1e-9) return;
+        var height = spacing * 0.06;
+
+        if (!definition.IsWriteEnabled) definition.UpgradeOpen();
+        void Add(Entity entity)
+        {
+            entity.ColorIndex = 1;
+            definition.AppendEntity(entity);
+            tr.AddNewlyCreatedDBObject(entity, true);
+        }
+        for (var index = 0; index < points.Length; index++)
+        {
+            var tip = points[index];
+            var direction = tip - center;
+            if (direction.Length < 1e-9) direction = Vector3d.XAxis;
+            direction = direction.GetNormal();
+            var side = Vector3d.ZAxis.CrossProduct(direction) * (height * 0.25);
+            var basePoint = tip + direction * (height * 0.8);
+            var tail = tip + direction * (height * 3);
+            Add(new Solid(tip, basePoint + side, basePoint - side, basePoint - side));
+            Add(new Line(basePoint, tail));
+            var shift = direction.X < 0 ? -height * 1.7 : height * 0.2;
+            Add(new DBText { TextString = $"C{index + 1}", Height = height,
+                Position = tail + new Vector3d(shift, height * 0.15, 0) });
+        }
+
+        if (!dictionary.IsWriteEnabled) dictionary.UpgradeOpen();
+        var marker = new Xrecord();
+        dictionary.SetAt(ArrowKey, marker);
+        tr.AddNewlyCreatedDBObject(marker, true);
+    }
+
     internal static Point3d[] Corners(Transaction tr, BlockReference station)
     {
         var definition = (BlockTableRecord)tr.GetObject(station.BlockTableRecord, OpenMode.ForRead);
+        return ReadCorners(tr, definition).Select(point => point.TransformBy(station.BlockTransform)).ToArray();
+    }
+
+    private static Point3d[] ReadCorners(Transaction tr, BlockTableRecord definition)
+    {
         if (definition.ExtensionDictionary.IsNull) return [];
         var dictionary = (DBDictionary)tr.GetObject(definition.ExtensionDictionary, OpenMode.ForRead);
         if (!dictionary.Contains(CornerKey)) return [];
         var record = (Xrecord)tr.GetObject(dictionary.GetAt(CornerKey), OpenMode.ForRead);
         using var data = record.Data;
-        return data?.AsArray().Select(value => value.Value).OfType<Point3d>()
-            .Select(point => point.TransformBy(station.BlockTransform)).ToArray() ?? [];
+        return data?.AsArray().Select(value => value.Value).OfType<Point3d>().ToArray() ?? [];
     }
 }
