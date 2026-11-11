@@ -17,9 +17,6 @@ public sealed class Plugin
     [CommandMethod("STATIONXREFSTART", CommandFlags.Session)]
     public void StartStationReference() => RunReferenceCommand(StationReferences.Start);
 
-    [CommandMethod("STATIONXREFKLAAR", CommandFlags.Session)]
-    public void FinishStationReference() => RunReferenceCommand(StationReferences.Finish);
-
     private static void RunReferenceCommand(Action run)
     {
         try { run(); }
@@ -130,11 +127,18 @@ public sealed class Plugin
                             }
 
                             using var save = new SaveFileDialog { Filter = filter, DefaultExt = "dwg",
-                                FileName = references.SelectedType.Name + " " + Path.GetFileNameWithoutExtension(doc.Name) + ".dwg" };
+                                FileName = "Percelen " + Path.GetFileNameWithoutExtension(doc.Name) + ".dwg" };
                             if (Path.IsPathFullyQualified(doc.Database.Filename))
                                 save.InitialDirectory = Path.GetDirectoryName(doc.Database.Filename);
                             if (save.ShowDialog() != DialogResult.OK) break;
-                            StationReferences.QueueCreate(doc, references.SelectedType, save.FileName);
+                            LayoutManager.Current.CurrentLayout = "Model";
+                            var first = doc.Editor.GetPoint("\nKies de eerste hoek van het perceelgebied: ");
+                            if (first.Status != PromptStatus.OK) break;
+                            var second = doc.Editor.GetCorner("\nKies de tegenoverliggende hoek: ", first.Value);
+                            if (second.Status != PromptStatus.OK) break;
+                            var ucs = doc.Editor.CurrentUserCoordinateSystem;
+                            var area = ParcelArea.FromCorners(first.Value.TransformBy(ucs), second.Value.TransformBy(ucs));
+                            StationReferences.QueueCreate(doc, save.FileName, area);
                             return;
                         }
                     case StationLocationAction.Signature:

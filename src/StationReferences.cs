@@ -6,90 +6,47 @@ using AcApp = Autodesk.AutoCAD.ApplicationServices.Core.Application;
 
 namespace Stationslocaties;
 
-internal sealed record StationReferenceType(string Name, string ImportCommand, bool IsParcels = false)
-{
-    internal static readonly StationReferenceType[] Choices =
-    [
-        new("Topo", "ICMImportIMGeoInteractive"),
-        new("Percelen", "ICMImportIMDKKInteractive", true),
-        new("Klic", "ICMImportKLIC")
-    ];
-
-    public override string ToString() => Name;
-}
-
 internal static class StationReferences
 {
-    private sealed record Request(Document Host, StationReferenceType Type, string Path);
+    private sealed record Request(string Path, ParcelArea Area);
     private static readonly Dictionary<Document, Request> queued = new();
-    private static readonly Dictionary<Document, Request> importing = new();
 
-    internal static void QueueCreate(Document host, StationReferenceType type, string path)
+    internal static void QueueCreate(Document host, string path, ParcelArea area)
     {
-        queued[host] = new(host, type, path);
+        queued[host] = new(path, area);
         host.SendStringToExecute("STATIONXREFSTART\n", true, false, false);
     }
 
     internal static void Start()
     {
-        var documents = AcApp.DocumentManager;
-        var host = documents.MdiActiveDocument;
+        var host = AcApp.DocumentManager.MdiActiveDocument;
         if (host == null || !queued.Remove(host, out var request)) return;
-
         if (File.Exists(request.Path))
             throw new IOException("Deze Xref-DWG bestaat al. Kies een nieuwe bestandsnaam.");
-        using (var drawing = new Database(true, true))
+
+        host.Editor.WriteMessage("\nPerceelgrenzen en -nummers ophalen bij PDOK...\n");
+        (int Boundaries, int Labels) counts;
+        var temporary = Path.Combine(Path.GetDirectoryName(request.Path)!, "." + Guid.NewGuid().ToString("N") + ".dwg");
+        try
         {
-            drawing.Insunits = UnitsValue.Meters;
-            drawing.SaveAs(request.Path, DwgVersion.Current);
-        }
-
-        var source = documents.Open(request.Path, false);
-        importing[source] = request;
-        documents.MdiActiveDocument = source;
-        source.Editor.WriteMessage("\nImporteer de kaart met InfraCAD Map. Voer daarna STATIONXREFKLAAR uit in deze brontekening.\n");
-        source.SendStringToExecute(request.Type.ImportCommand + "\n", true, false, false);
-    }
-
-    internal static void Finish()
-    {
-        var documents = AcApp.DocumentManager;
-        var source = documents.MdiActiveDocument;
-        if (source == null) return;
-        if (!importing.TryGetValue(source, out var request))
-            throw new InvalidOperationException("Open de brontekening die via Kaartreferenties maken is gestart.");
-
-        if (!documents.Cast<Document>().Contains(request.Host))
-            throw new InvalidOperationException("De oorspronkelijke stationstekening is gesloten. Open die tekening en koppel de opgeslagen DWG via Bestaande DWG koppelen.");
-
-        using (source.LockDocument())
-        {
-            var db = source.Database;
-            using (var tr = db.TransactionManager.StartTransaction())
+            using (var drawing = new Database(true, true))
             {
-                var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
-                if (!model.Cast<ObjectId>().Any(id => !id.IsErased))
-                    throw new InvalidOperationException("Importeer eerst kaartobjecten in deze brontekening.");
-                if (request.Type.IsParcels) ColorParcels(db, tr);
-                tr.Commit();
+                drawing.Insunits = UnitsValue.Meters;
+                counts = StationParcels.Write(drawing, request.Area);
+                drawing.SaveAs(temporary, DwgVersion.Current);
             }
-            db.SaveAs(request.Path, DwgVersion.Current);
+            File.Move(temporary, request.Path);
         }
+        finally { File.Delete(temporary); }
 
-        Attach(request.Host, request.Path, request.Type);
-        importing.Remove(source);
-        documents.MdiActiveDocument = request.Host;
-        request.Host.Editor.Regen();
-        request.Host.Editor.WriteMessage($"\nXref '{Path.GetFileNameWithoutExtension(request.Path)}' gekoppeld.");
+        Attach(host, request.Path, "PERCELEN");
+        host.Editor.Regen();
+        host.Editor.WriteMessage($"\nPercelen gekoppeld: {counts.Boundaries} grenzen en {counts.Labels} perceelnummers.");
     }
 
-    internal static void Forget(Document document)
-    {
-        queued.Remove(document);
-        importing.Remove(document);
-    }
+    internal static void Forget(Document document) => queued.Remove(document);
 
-    internal static void Attach(Document host, string path, StationReferenceType? type = null)
+    internal static void Attach(Document host, string path, string? type = null)
     {
         var db = host.Database;
         var fullPath = Path.GetFullPath(path);
@@ -127,9 +84,9 @@ internal static class StationReferences
             var references = model.Cast<ObjectId>().Where(id => !id.IsErased && id.ObjectClass.DxfName == "INSERT")
                 .Select(id => (BlockReference)tr.GetObject(id, OpenMode.ForRead)).ToLookup(block => block.Layer);
             // Move in reverse order so Topo lies below the parcel and utility linework.
-            foreach (var kind in StationReferenceType.Choices.Reverse())
+            foreach (var kind in new[] { "KLIC", "PERCELEN", "TOPO" })
             {
-                var ids = references["STATIONLOCATIES_XREF_" + kind.Name.ToUpperInvariant()]
+                var ids = references["STATIONLOCATIES_XREF_" + kind]
                     .Select(block => block.ObjectId).ToArray();
                 if (ids.Length > 0) order.MoveToBottom(new ObjectIdCollection(ids));
             }
@@ -137,9 +94,9 @@ internal static class StationReferences
         tr.Commit();
     }
 
-    private static ObjectId ReferenceLayer(Database db, Transaction tr, StationReferenceType type)
+    private static ObjectId ReferenceLayer(Database db, Transaction tr, string type)
     {
-        var name = "STATIONLOCATIES_XREF_" + type.Name.ToUpperInvariant();
+        var name = "STATIONLOCATIES_XREF_" + type;
         var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
         if (layers.Has(name)) return layers[name];
         layers.UpgradeOpen();
@@ -147,30 +104,5 @@ internal static class StationReferences
         var id = layers.Add(layer);
         tr.AddNewlyCreatedDBObject(layer, true);
         return id;
-    }
-
-    private static void ColorParcels(Database db, Transaction tr)
-    {
-        using var orange = Autodesk.AutoCAD.Colors.Color.FromRgb(184, 85, 9);
-        var modelId = SymbolUtilityServices.GetBlockModelSpaceId(db);
-        var visited = new HashSet<ObjectId>();
-        void ColorBlock(ObjectId id)
-        {
-            if (!visited.Add(id)) return;
-            var block = (BlockTableRecord)tr.GetObject(id, OpenMode.ForRead);
-            if (block.IsFromExternalReference) return;
-            foreach (ObjectId entityId in block)
-            {
-                if (entityId.IsErased || tr.GetObject(entityId, OpenMode.ForRead) is not Entity entity) continue;
-                if (!entity.IsWriteEnabled) entity.UpgradeOpen();
-                entity.Color = orange;
-                if (entity is not BlockReference reference) continue;
-                ColorBlock(reference.BlockTableRecord);
-                foreach (ObjectId attributeId in reference.AttributeCollection)
-                    if (!attributeId.IsErased && tr.GetObject(attributeId, OpenMode.ForWrite) is AttributeReference attribute)
-                        attribute.Color = orange;
-            }
-        }
-        ColorBlock(modelId);
     }
 }
