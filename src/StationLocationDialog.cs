@@ -127,18 +127,18 @@ public sealed class Plugin
                             }
 
                             using var save = new SaveFileDialog { Filter = filter, DefaultExt = "dwg",
-                                FileName = "Percelen " + Path.GetFileNameWithoutExtension(doc.Name) + ".dwg" };
+                                FileName = references.Kind + " " + Path.GetFileNameWithoutExtension(doc.Name) + ".dwg" };
                             if (Path.IsPathFullyQualified(doc.Database.Filename))
                                 save.InitialDirectory = Path.GetDirectoryName(doc.Database.Filename);
                             if (save.ShowDialog() != DialogResult.OK) break;
                             LayoutManager.Current.CurrentLayout = "Model";
-                            var first = doc.Editor.GetPoint("\nKies de eerste hoek van het perceelgebied: ");
+                            var first = doc.Editor.GetPoint("\nKies de eerste hoek van het kaartgebied: ");
                             if (first.Status != PromptStatus.OK) break;
                             var second = doc.Editor.GetCorner("\nKies de tegenoverliggende hoek: ", first.Value);
                             if (second.Status != PromptStatus.OK) break;
                             var ucs = doc.Editor.CurrentUserCoordinateSystem;
                             var area = ParcelArea.FromCorners(first.Value.TransformBy(ucs), second.Value.TransformBy(ucs));
-                            StationReferences.QueueCreate(doc, save.FileName, area);
+                            StationReferences.QueueCreate(doc, save.FileName, area, references.Kind);
                             return;
                         }
                     case StationLocationAction.Signature:

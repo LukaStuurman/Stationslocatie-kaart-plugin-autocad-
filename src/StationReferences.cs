@@ -6,18 +6,20 @@ using AcApp = Autodesk.AutoCAD.ApplicationServices.Core.Application;
 
 namespace Stationslocaties;
 
+internal enum MapKind { Percelen, Topo }
+
 internal static class StationReferences
 {
-    private sealed record Request(string Path, ParcelArea Area);
-    private sealed record Download(Request Request, Task<ParcelData> Task, CancellationTokenSource Cancellation);
+    private sealed record Request(string Path, ParcelArea Area, MapKind Kind);
+    private sealed record Download(Request Request, Task<Func<Database, string>> Task, CancellationTokenSource Cancellation);
     private static readonly Dictionary<Document, Request> queued = new();
     private static readonly Dictionary<Document, Download> downloading = new();
 
-    internal static void QueueCreate(Document host, string path, ParcelArea area)
+    internal static void QueueCreate(Document host, string path, ParcelArea area, MapKind kind)
     {
         if (queued.ContainsKey(host) || downloading.ContainsKey(host))
-            throw new InvalidOperationException("Voor deze tekening wordt al een perceelkaart opgehaald.");
-        queued.Add(host, new(path, area));
+            throw new InvalidOperationException("Voor deze tekening wordt al een kaart opgehaald.");
+        queued.Add(host, new(path, area, kind));
         host.SendStringToExecute("STATIONXREFSTART\n", true, false, false);
     }
 
@@ -29,9 +31,9 @@ internal static class StationReferences
             throw new IOException("Deze Xref-DWG bestaat al. Kies een nieuwe bestandsnaam.");
 
         host.Editor.WriteMessage("\nPDOK wordt op de achtergrond opgehaald. Je kunt intussen verder tekenen.\n");
-        var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         var token = cancellation.Token;
-        var task = Task.Run(() => StationParcels.Download(request.Area, token), token);
+        var task = Task.Run(() => PrepareMap(request, token), token);
         if (downloading.Count == 0) AcApp.Idle += FinishDownload;
         downloading.Add(host, new(request, task, cancellation));
     }
@@ -47,11 +49,11 @@ internal static class StationReferences
         try
         {
             var data = download.Task.GetAwaiter().GetResult();
-            SaveAndAttach(host, download.Request.Path, data);
+            SaveAndAttach(host, download.Request, data);
         }
         catch (OperationCanceledException)
         {
-            host.Editor.WriteMessage("\nPercelen ophalen duurde te lang. Probeer het opnieuw of kies een kleiner gebied.");
+            host.Editor.WriteMessage("\nDe kaart ophalen duurde te lang. Probeer het opnieuw of kies een kleiner gebied.");
         }
         catch (Exception ex)
         {
@@ -59,24 +61,46 @@ internal static class StationReferences
         }
     }
 
-    private static void SaveAndAttach(Document host, string path, ParcelData data)
+    private static Func<Database, string> PrepareMap(Request request, CancellationToken cancellation)
     {
+        if (request.Kind == MapKind.Topo)
+        {
+            var topo = StationTopo.Download(request.Area, cancellation);
+            return drawing =>
+            {
+                StationTopo.Write(drawing, topo);
+                return $"{topo.Shapes.Count} geometrieën en {topo.Labels.Count} labels";
+            };
+        }
+
+        var parcels = StationParcels.Download(request.Area, cancellation);
+        return drawing =>
+        {
+            StationParcels.Write(drawing, parcels);
+            return $"{parcels.Boundaries.Count} grenzen en {parcels.Labels.Count} perceelnummers";
+        };
+    }
+
+    private static void SaveAndAttach(Document host, Request request, Func<Database, string> write)
+    {
+        var path = request.Path;
+        string summary;
         var temporary = Path.Combine(Path.GetDirectoryName(path)!, "." + Guid.NewGuid().ToString("N") + ".dwg");
         try
         {
             using (var drawing = new Database(true, true))
             {
                 drawing.Insunits = UnitsValue.Meters;
-                StationParcels.Write(drawing, data);
+                summary = write(drawing);
                 drawing.SaveAs(temporary, DwgVersion.Current);
             }
             File.Move(temporary, path);
         }
         finally { File.Delete(temporary); }
 
-        Attach(host, path, "PERCELEN");
+        Attach(host, path, request.Kind.ToString().ToUpperInvariant());
         host.Editor.Regen();
-        host.Editor.WriteMessage($"\nPercelen gekoppeld: {data.Boundaries.Count} grenzen en {data.Labels.Count} perceelnummers.");
+        host.Editor.WriteMessage($"\n{request.Kind} gekoppeld: {summary}.");
     }
 
     internal static void Forget(Document document)
