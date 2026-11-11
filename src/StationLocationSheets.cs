@@ -390,19 +390,37 @@ internal static class StationLocationSheets
         tr.Commit();
     }
 
+    internal static bool IsStationLayer(string layer) =>
+        layer.StartsWith("TB_STATION_", StringComparison.OrdinalIgnoreCase);
+
+    internal static void UpdateMovedStationTables(Database db, IReadOnlyCollection<ObjectId> changed)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        var stations = changed.Where(IsLive).Select(id => tr.GetObject(id, OpenMode.ForRead))
+            .OfType<BlockReference>().Where(station => BlockName(tr, station) == Symbol)
+            .ToLookup(station => station.Layer, StringComparer.OrdinalIgnoreCase);
+        if (stations.Count == 0) return;
+        foreach (var sheet in ReadSheets(db, tr))
+            if (stations[sheet.Layer].FirstOrDefault() is { } station)
+                UpdateCornerTable(db, tr, GetLayout(db, tr, sheet.Name), station);
+        tr.Commit();
+    }
+
     private static void UpdateCornerTable(Database db, Transaction tr, Layout layout, BlockReference station)
     {
         var layer = Layer(db, tr, CornerTableLayer);
         var coordinates = NativeStationGeometry.StationCorners(station);
+        const double bottom = 3.124045803; // Bottom edge of the cable legend in the detail sheet template.
+        const double offset = bottom - 5;
         var cells = new List<(string Text, double X, double Y, double Height)>
         {
-            ("Hoekpunten trafo (m)", 122, 31, 2.6),
-            ("Punt", 122, 25, 2.1), ("X", 137, 25, 2.1), ("Y", 160, 25, 2.1)
+            ("Hoekpunten trafo (m)", 122, 31 + offset, 2.6),
+            ("Punt", 122, 25 + offset, 2.1), ("X", 137, 25 + offset, 2.1), ("Y", 160, 25 + offset, 2.1)
         };
         var culture = CultureInfo.GetCultureInfo("nl-NL");
         for (var index = 0; index < coordinates.Length; index++)
         {
-            var y = 20 - 4 * index;
+            var y = 20 + offset - 4 * index;
             cells.Add(($"C{index + 1}", 122, y, 2.1));
             cells.Add((coordinates[index].X.ToString("F2", culture), 137, y, 2.1));
             cells.Add((coordinates[index].Y.ToString("F2", culture), 160, y, 2.1));
@@ -429,10 +447,10 @@ internal static class StationLocationSheets
         }
 
         var border = new Polyline(4) { Closed = true };
-        var corners = new[] { new Point2d(119, 5), new Point2d(183, 5), new Point2d(183, 36), new Point2d(119, 36) };
+        var corners = new[] { new Point2d(119, bottom), new Point2d(183, bottom), new Point2d(183, 36 + offset), new Point2d(119, 36 + offset) };
         for (var index = 0; index < corners.Length; index++) border.AddVertexAt(index, corners[index], 0, 0, 0);
         Add(border);
-        Add(new Line(new Point3d(119, 23.5, 0), new Point3d(183, 23.5, 0)));
+        Add(new Line(new Point3d(119, 23.5 + offset, 0), new Point3d(183, 23.5 + offset, 0)));
         foreach (var cell in cells)
             Add(new DBText { TextString = cell.Text, Height = cell.Height, Position = new Point3d(cell.X, cell.Y, 0) });
     }
