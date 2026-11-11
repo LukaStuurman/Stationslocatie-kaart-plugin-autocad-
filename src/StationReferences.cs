@@ -9,11 +9,15 @@ namespace Stationslocaties;
 internal static class StationReferences
 {
     private sealed record Request(string Path, ParcelArea Area);
+    private sealed record Download(Request Request, Task<ParcelData> Task, CancellationTokenSource Cancellation);
     private static readonly Dictionary<Document, Request> queued = new();
+    private static readonly Dictionary<Document, Download> downloading = new();
 
     internal static void QueueCreate(Document host, string path, ParcelArea area)
     {
-        queued[host] = new(path, area);
+        if (queued.ContainsKey(host) || downloading.ContainsKey(host))
+            throw new InvalidOperationException("Voor deze tekening wordt al een perceelkaart opgehaald.");
+        queued.Add(host, new(path, area));
         host.SendStringToExecute("STATIONXREFSTART\n", true, false, false);
     }
 
@@ -24,27 +28,69 @@ internal static class StationReferences
         if (File.Exists(request.Path))
             throw new IOException("Deze Xref-DWG bestaat al. Kies een nieuwe bestandsnaam.");
 
-        host.Editor.WriteMessage("\nPerceelgrenzen en -nummers ophalen bij PDOK...\n");
-        (int Boundaries, int Labels) counts;
-        var temporary = Path.Combine(Path.GetDirectoryName(request.Path)!, "." + Guid.NewGuid().ToString("N") + ".dwg");
+        host.Editor.WriteMessage("\nPDOK wordt op de achtergrond opgehaald. Je kunt intussen verder tekenen.\n");
+        var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        var token = cancellation.Token;
+        var task = Task.Run(() => StationParcels.Download(request.Area, token), token);
+        if (downloading.Count == 0) AcApp.Idle += FinishDownload;
+        downloading.Add(host, new(request, task, cancellation));
+    }
+
+    private static void FinishDownload(object? sender, EventArgs args)
+    {
+        var host = AcApp.DocumentManager.MdiActiveDocument;
+        if (host == null || !string.IsNullOrEmpty(host.CommandInProgress) ||
+            !downloading.TryGetValue(host, out var download) || !download.Task.IsCompleted) return;
+        downloading.Remove(host);
+        if (downloading.Count == 0) AcApp.Idle -= FinishDownload;
+        using var cancellation = download.Cancellation;
+        try
+        {
+            var data = download.Task.GetAwaiter().GetResult();
+            SaveAndAttach(host, download.Request.Path, data);
+        }
+        catch (OperationCanceledException)
+        {
+            host.Editor.WriteMessage("\nPercelen ophalen duurde te lang. Probeer het opnieuw of kies een kleiner gebied.");
+        }
+        catch (Exception ex)
+        {
+            host.Editor.WriteMessage("\nKaartreferentie: " + ex.Message);
+        }
+    }
+
+    private static void SaveAndAttach(Document host, string path, ParcelData data)
+    {
+        var temporary = Path.Combine(Path.GetDirectoryName(path)!, "." + Guid.NewGuid().ToString("N") + ".dwg");
         try
         {
             using (var drawing = new Database(true, true))
             {
                 drawing.Insunits = UnitsValue.Meters;
-                counts = StationParcels.Write(drawing, request.Area);
+                StationParcels.Write(drawing, data);
                 drawing.SaveAs(temporary, DwgVersion.Current);
             }
-            File.Move(temporary, request.Path);
+            File.Move(temporary, path);
         }
         finally { File.Delete(temporary); }
 
-        Attach(host, request.Path, "PERCELEN");
+        Attach(host, path, "PERCELEN");
         host.Editor.Regen();
-        host.Editor.WriteMessage($"\nPercelen gekoppeld: {counts.Boundaries} grenzen en {counts.Labels} perceelnummers.");
+        host.Editor.WriteMessage($"\nPercelen gekoppeld: {data.Boundaries.Count} grenzen en {data.Labels.Count} perceelnummers.");
     }
 
-    internal static void Forget(Document document) => queued.Remove(document);
+    internal static void Forget(Document document)
+    {
+        queued.Remove(document);
+        if (!downloading.Remove(document, out var download)) return;
+        if (downloading.Count == 0) AcApp.Idle -= FinishDownload;
+        download.Cancellation.Cancel();
+        _ = download.Task.ContinueWith(task =>
+        {
+            _ = task.Exception;
+            download.Cancellation.Dispose();
+        }, TaskScheduler.Default);
+    }
 
     internal static void Attach(Document host, string path, string? type = null)
     {

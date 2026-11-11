@@ -26,13 +26,16 @@ internal readonly record struct ParcelArea(double Left, double Bottom, double Ri
     internal string Bounds => FormattableString.Invariant($"{Left:R},{Bottom:R},{Right:R},{Top:R}");
 }
 
+internal sealed record ParcelData(IReadOnlyList<(double X, double Y)[]> Boundaries,
+    IReadOnlyList<(double X, double Y, string Text)> Labels);
+
 internal static class StationParcels
 {
     private const string BaseUrl = "https://api.pdok.nl/kadaster/brk-kadastrale-kaart/ogc/v1/collections/";
     private const string Crs = "http://www.opengis.net/def/crs/EPSG/0/28992";
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
 
-    internal static (int Boundaries, int Labels) Write(Database db, ParcelArea area)
+    internal static void Write(Database db, ParcelData data)
     {
         using var tr = db.TransactionManager.StartTransaction();
         var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForWrite);
@@ -57,8 +60,22 @@ internal static class StationParcels
             tr.AddNewlyCreatedDBObject(entity, true);
         }
 
-        var boundaries = 0;
-        foreach (var feature in Features("kadastralegrens", area))
+        foreach (var points in data.Boundaries)
+        {
+            var polyline = new Polyline(points.Length);
+            for (var index = 0; index < points.Length; index++)
+                polyline.AddVertexAt(index, new Point2d(points[index].X, points[index].Y), 0, 0, 0);
+            Add(polyline, boundaryLayer);
+        }
+        foreach (var label in data.Labels)
+            Add(new DBText { Position = new Point3d(label.X, label.Y, 0), Height = 1.15, TextString = label.Text }, labelLayer);
+        tr.Commit();
+    }
+
+    internal static ParcelData Download(ParcelArea area, CancellationToken cancellation)
+    {
+        var boundaries = new List<(double X, double Y)[]>();
+        foreach (var feature in Features("kadastralegrens", area, cancellation))
         {
             if (!feature.TryGetProperty("geometry", out var geometry) || geometry.ValueKind == JsonValueKind.Null) continue;
             var lines = geometry.GetProperty("coordinates");
@@ -74,10 +91,10 @@ internal static class StationParcels
                     throw new IOException("PDOK gaf een onverwacht geometrieformaat voor een perceelgrens.");
             }
         }
-        if (boundaries == 0) throw new InvalidOperationException("PDOK heeft geen perceelgrenzen gevonden binnen dit gebied.");
+        if (boundaries.Count == 0) throw new InvalidOperationException("PDOK heeft geen perceelgrenzen gevonden binnen dit gebied.");
 
-        var labels = 0;
-        foreach (var feature in Features("perceel", area))
+        var labels = new List<(double X, double Y, string Text)>();
+        foreach (var feature in Features("perceel", area, cancellation))
         {
             var properties = feature.GetProperty("properties");
             if (!TryNumber(properties, "perceelnummer_plaatscoordinaat_x", out var x) ||
@@ -85,20 +102,14 @@ internal static class StationParcels
                 !area.Contains(x, y) ||
                 !properties.TryGetProperty("perceelnummer", out var number) ||
                 number.ValueKind != JsonValueKind.Number) continue;
-            Add(new DBText { Position = new Point3d(x, y, 0), Height = 1.15, TextString = number.GetRawText() }, labelLayer);
-            labels++;
+            labels.Add((x, y, number.GetRawText()));
         }
-        tr.Commit();
-        return (boundaries, labels);
+        return new(boundaries, labels);
 
         void AddBoundary(JsonElement line)
         {
-            var points = line.EnumerateArray().Select(point => new Point2d(point[0].GetDouble(), point[1].GetDouble())).ToArray();
-            if (points.Length < 2) return;
-            var polyline = new Polyline(points.Length);
-            for (var index = 0; index < points.Length; index++) polyline.AddVertexAt(index, points[index], 0, 0, 0);
-            Add(polyline, boundaryLayer);
-            boundaries++;
+            var points = line.EnumerateArray().Select(point => (point[0].GetDouble(), point[1].GetDouble())).ToArray();
+            if (points.Length >= 2) boundaries.Add(points);
         }
     }
 
@@ -109,7 +120,7 @@ internal static class StationParcels
             value.TryGetDouble(out number) && double.IsFinite(number);
     }
 
-    private static IEnumerable<JsonElement> Features(string collection, ParcelArea area)
+    private static IEnumerable<JsonElement> Features(string collection, ParcelArea area, CancellationToken cancellation)
     {
         var endpoint = new Uri(BaseUrl + collection + "/items");
         var crs = Uri.EscapeDataString(Crs);
@@ -123,7 +134,7 @@ internal static class StationParcels
                 throw new IOException("De paginering van PDOK is ongeldig of het gebied is te groot.");
             using var request = new HttpRequestMessage(HttpMethod.Get, next);
             request.Headers.Accept.ParseAdd("application/geo+json");
-            using var response = Http.Send(request);
+            using var response = Http.Send(request, cancellation);
             if (!response.IsSuccessStatusCode)
                 throw new IOException($"PDOK kon {collection} niet ophalen (HTTP {(int)response.StatusCode}).");
             if (response.Headers.TryGetValues("Content-Crs", out var advertised) &&
@@ -133,6 +144,7 @@ internal static class StationParcels
             using var data = JsonDocument.Parse(stream);
             foreach (var feature in data.RootElement.GetProperty("features").EnumerateArray())
             {
+                cancellation.ThrowIfCancellationRequested();
                 if (feature.TryGetProperty("id", out var id) && !seen.Add(id.GetRawText())) continue;
                 yield return feature;
             }

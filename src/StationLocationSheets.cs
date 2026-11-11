@@ -378,6 +378,7 @@ internal static class StationLocationSheets
             var layout = GetLayout(db, tr, name);
             DisableLayoutGrid(tr, layout);
             NativeStationGeometry.RepairFreeSpaceLegend(tr, layout, overview);
+            NativeStationGeometry.RepairParcelLegend(db, tr, layout, overview);
             NativeStationGeometry.RemoveStrayLegendPolyline(tr, layout);
             WriteSignatureLogo(db, tr, layout, signature);
         }

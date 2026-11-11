@@ -22,6 +22,7 @@ internal static class NativeStationGeometry
         foreach (var shape in sheet.Entities.Where(shape => !IsFreeSpaceHatch(shape) && !IsStrayLegendPolyline(shape)))
             AppendShape(space, tr, shape);
         RepairFreeSpaceLegend(tr, layout, overview);
+        RepairParcelLegend(db, tr, layout, overview);
 
         var titleId = GetBlock(db, tr, TitleName, block =>
         {
@@ -167,6 +168,46 @@ internal static class NativeStationGeometry
     }
 
     private static bool IsFreeSpaceHatch(Shape shape) => shape.K == "HATCH" && shape.S == "ANSI31" && shape.C == 114;
+
+    internal static void RepairParcelLegend(Database db, Transaction tr, Layout layout, bool overview)
+    {
+        const string layerName = "STATIONLOCATIES_LEGENDA_PERCEEL";
+        var sheet = overview ? Data.Value.Overview : Data.Value.Detail;
+        var source = sheet.Entities.Single(shape => shape.K == "LWPOLYLINE" && shape.C == 95 && shape.Closed);
+        var label = sheet.Entities.Single(shape => shape.S == "Te plaatsen trafo");
+        var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        ObjectId layerId;
+        if (layers.Has(layerName)) layerId = layers[layerName];
+        else
+        {
+            if (!layers.IsWriteEnabled) layers.UpgradeOpen();
+            var layer = new LayerTableRecord { Name = layerName };
+            layerId = layers.Add(layer);
+            tr.AddNewlyCreatedDBObject(layer, true);
+        }
+
+        var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+        var existing = space.Cast<ObjectId>().Where(id => !id.IsErased && id.ObjectClass.DxfName is "LWPOLYLINE" or "MTEXT")
+            .Select(id => (Entity)tr.GetObject(id, OpenMode.ForRead)).Where(entity => entity.LayerId == layerId).ToArray();
+        if (existing.Length == 2 && existing.Any(entity => entity is Polyline) &&
+            existing.Any(entity => entity is MText { Contents: "Perceel" })) return;
+        foreach (var entity in existing)
+        {
+            if (!entity.IsWriteEnabled) entity.UpgradeOpen();
+            entity.Erase();
+        }
+
+        if (!space.IsWriteEnabled) space.UpgradeOpen();
+        var shift = new Vector3d(0, -7, 0);
+        using var orange = Autodesk.AutoCAD.Colors.Color.FromRgb(154, 69, 8);
+        var border = PolylineOf(source);
+        border.LayerId = layerId;
+        border.Color = orange;
+        border.TransformBy(Matrix3d.Displacement(shift));
+        Add(space, tr, border);
+        Add(space, tr, new MText { LayerId = layerId, Contents = "Perceel", Location = Point(label.P) + shift,
+            TextHeight = label.H, Width = label.W, Attachment = (AttachmentPoint)label.A, Rotation = label.R });
+    }
 
     internal static void RepairFreeSpaceLegend(Transaction tr, Layout layout, bool overview)
     {
