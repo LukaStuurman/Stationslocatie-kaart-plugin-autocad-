@@ -923,15 +923,42 @@ internal static class StationLocationSheets
 
     private static void SetAttributes(Database db, Transaction tr, Layout layout, Dictionary<string, string> values)
     {
-        foreach (ObjectId id in Title(tr, layout).AttributeCollection)
+        var title = Title(tr, layout);
+        foreach (ObjectId id in title.AttributeCollection)
         {
             if (!IsLive(id)) continue;
             var attribute = (AttributeReference)tr.GetObject(id, OpenMode.ForRead);
-            if (!values.TryGetValue(attribute.Tag, out var value) || attribute.TextString == value) continue;
+            if (!values.TryGetValue(attribute.Tag, out var value)) continue;
+            var height = attribute.Tag.Equals("TEKENINGNUMMER", StringComparison.OrdinalIgnoreCase)
+                ? DrawingNumberHeight(db, title, attribute, value)
+                : attribute.Height;
+            if (attribute.TextString == value && Math.Abs(attribute.Height - height) < 1e-8) continue;
             if (!attribute.IsWriteEnabled) attribute.UpgradeOpen();
             attribute.TextString = value;
+            attribute.Height = height;
             attribute.AdjustAlignment(db);
         }
+    }
+
+    private static double DrawingNumberHeight(Database db, BlockReference title, AttributeReference attribute, string value)
+    {
+        // The detail sheets and Totaal use the same title block cell.
+        const double templateHeight = 2.94;
+        const double widthFromInsertionToBorder = 49.308;
+        const double rightPadding = 1.092;
+        var height = templateHeight * Math.Abs(title.ScaleFactors.Y);
+        if (string.IsNullOrWhiteSpace(value)) return height;
+
+        using var text = new DBText();
+        text.SetDatabaseDefaults(db);
+        text.TextStyleId = attribute.TextStyleId;
+        text.Height = height;
+        text.WidthFactor = attribute.WidthFactor;
+        text.Oblique = attribute.Oblique;
+        text.TextString = value;
+        var width = text.GeometricExtents.MaxPoint.X;
+        var available = (widthFromInsertionToBorder - rightPadding) * Math.Abs(title.ScaleFactors.X);
+        return width > available ? height * available / width : height;
     }
 
     private static void AttachPhoto(Database db, Transaction tr, Layout layout, string source, string raster, PhotoFrame frame)
