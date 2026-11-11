@@ -127,17 +127,64 @@ internal static class NativeStationGeometry
         return entity;
     }
 
+    private const double FreeSpaceHatchSpacing = 1.0;
+
+    private static bool IsFreeSpaceHatch(Shape shape) => shape.K == "HATCH" && shape.S == "ANSI31" && shape.C == 114;
+
+    internal static void RepairFreeSpaceLegend(Transaction tr, Layout layout, bool overview)
+    {
+        var sheet = overview ? Data.Value.Overview : Data.Value.Detail;
+        var sample = sheet.Entities.Single(IsFreeSpaceHatch);
+        var corners = sample.Loops[0].Select(p => new Point2d(p[0], p[1])).Distinct().ToArray();
+        var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+        foreach (ObjectId id in space)
+        {
+            if (id.IsErased || id.ObjectClass.DxfName != "HATCH") continue;
+            var hatch = (Hatch)tr.GetObject(id, OpenMode.ForRead);
+            if (hatch.ColorIndex != sample.C || hatch.NumberOfLoops != 1) continue;
+            var loop = hatch.GetLoopAt(0);
+            if (!loop.IsPolyline) continue;
+            var vertices = loop.Polyline.Cast<BulgeVertex>().Select(vertex => vertex.Vertex).ToArray();
+            if (!corners.All(corner => vertices.Any(vertex => vertex.GetDistanceTo(corner) < 0.001)) ||
+                !vertices.All(vertex => corners.Any(corner => corner.GetDistanceTo(vertex) < 0.001))) continue;
+
+            if (hatch.PatternType == HatchPatternType.UserDefined &&
+                Math.Abs(hatch.PatternSpace - FreeSpaceHatchSpacing) < 1e-8) return;
+            if (!hatch.IsWriteEnabled) hatch.UpgradeOpen();
+            ConfigureFreeSpaceHatch(hatch, sample.R);
+            hatch.EvaluateHatch(true);
+            return;
+        }
+
+        if (!space.IsWriteEnabled) space.UpgradeOpen();
+        AppendShape(space, tr, sample);
+    }
+
+    private static void ConfigureFreeSpaceHatch(Hatch hatch, double angle)
+    {
+        // Paper-space spacing is independent of the drawing's ANSI31 pattern units.
+        hatch.PatternAngle = angle;
+        hatch.PatternSpace = FreeSpaceHatchSpacing;
+        hatch.PatternDouble = false;
+        hatch.SetHatchPattern(HatchPatternType.UserDefined, null);
+    }
+
     private static void AppendShape(BlockTableRecord owner, Transaction tr, Shape shape)
     {
         if (shape.K == "HATCH")
         {
             var hatch = new Hatch { ColorIndex = shape.C };
             Add(owner, tr, hatch);
-            hatch.SetHatchPattern(HatchPatternType.PreDefined, shape.Solid ? "SOLID" : shape.S);
-            if (!shape.Solid)
+            if (IsFreeSpaceHatch(shape))
+                ConfigureFreeSpaceHatch(hatch, shape.R);
+            else
             {
-                hatch.PatternScale = shape.W > 0 ? shape.W : 1;
-                hatch.PatternAngle = shape.R;
+                hatch.SetHatchPattern(HatchPatternType.PreDefined, shape.Solid ? "SOLID" : shape.S);
+                if (!shape.Solid)
+                {
+                    hatch.PatternScale = shape.W > 0 ? shape.W : 1;
+                    hatch.PatternAngle = shape.R;
+                }
             }
             for (var i = 0; i < shape.Loops.Length; i++)
             {

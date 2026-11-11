@@ -360,11 +360,18 @@ internal static class StationLocationSheets
         }
     }
 
-    internal static void DisableExistingSheetGrids(Database db)
+    internal static void RepairExistingSheets(Database db)
     {
         using var tr = db.TransactionManager.StartTransaction();
-        foreach (var sheet in ReadSheets(db, tr)) DisableLayoutGrid(tr, GetLayout(db, tr, sheet.Name));
-        if (HasOverview(db, tr)) DisableLayoutGrid(tr, GetLayout(db, tr, OverviewName));
+        void Repair(string name, bool overview)
+        {
+            var layout = GetLayout(db, tr, name);
+            DisableLayoutGrid(tr, layout);
+            NativeStationGeometry.RepairFreeSpaceLegend(tr, layout, overview);
+        }
+
+        foreach (var sheet in ReadSheets(db, tr)) Repair(sheet.Name, false);
+        if (HasOverview(db, tr)) Repair(OverviewName, true);
         tr.Commit();
     }
 

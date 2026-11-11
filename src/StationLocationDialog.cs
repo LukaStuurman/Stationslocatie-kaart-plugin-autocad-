@@ -19,8 +19,8 @@ public sealed class Plugin
     {
         var doc = AcApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
-        try { StationLocationSheets.DisableExistingSheetGrids(doc.Database); }
-        catch (System.Exception ex) { doc.Editor.WriteMessage("\nRasterinstellingen: " + ex.Message); }
+        try { StationLocationSheets.RepairExistingSheets(doc.Database); }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\nBladen bijwerken: " + ex.Message); }
         StationSheet? selected = null;
         while (true)
         {
