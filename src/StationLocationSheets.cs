@@ -46,6 +46,7 @@ internal static class StationLocationSheets
 {
     internal const string OverviewName = "Totaal";
     private const string Tag = "TECHBASE_STATIONBLAD";
+    private const string SheetRepairKey = "STATIONLOCATIES_BLADHERSTEL_1";
     private const string Symbol = "TB_STATION_TRAFO";
     private const string CornerTableLayer = "STATIONLOCATIES_HOEKPUNTEN";
     private const string NoteLayerSuffix = "_KAARTOPMERKINGEN";
@@ -145,10 +146,14 @@ internal static class StationLocationSheets
     internal static StationFields ProjectFields(Database db, StationSheet? preferred = null)
     {
         using var tr = db.TransactionManager.StartTransaction();
-        var project = HasOverview(db, tr) ? ReadFields(db, OverviewName) : StationFields.Empty;
-        var shared = preferred == null ? project : ReadFields(db, preferred).FillSharedFrom(project);
+        var project = HasOverview(db, tr) ? ReadFields(tr, GetLayout(db, tr, OverviewName), includePhoto: false) : StationFields.Empty;
+        var shared = preferred == null ? project : ReadFields(tr, GetLayout(db, tr, preferred.Name), includePhoto: false).FillSharedFrom(project);
         foreach (var sheet in ReadSheets(db, tr))
-            shared = shared.FillSharedFrom(ReadFields(db, sheet));
+        {
+            if (shared.SharedAttributes().Values.All(value => !string.IsNullOrWhiteSpace(value))) break;
+            if (sheet == preferred) continue;
+            shared = shared.FillSharedFrom(ReadFields(tr, GetLayout(db, tr, sheet.Name), includePhoto: false));
+        }
         return project with
         {
             Project = shared.Project, Area = shared.Area, Municipality = shared.Municipality,
@@ -205,12 +210,16 @@ internal static class StationLocationSheets
     private static StationFields ReadFields(Database db, string name)
     {
         using var tr = db.TransactionManager.StartTransaction();
-        var layout = GetLayout(db, tr, name);
+        return ReadFields(tr, GetLayout(db, tr, name), includePhoto: true);
+    }
+
+    private static StationFields ReadFields(Transaction tr, Layout layout, bool includePhoto)
+    {
         var values = Title(tr, layout).AttributeCollection.Cast<ObjectId>()
             .Where(IsLive).Select(id => (AttributeReference)tr.GetObject(id, OpenMode.ForRead))
             .ToDictionary(a => a.Tag, a => a.TextString, StringComparer.OrdinalIgnoreCase);
         string Field(string key) => values.GetValueOrDefault(key, "");
-        var photo = PhotoImage(tr, layout);
+        var photo = includePhoto ? PhotoImage(tr, layout) : null;
         var path = photo == null ? "" : PhotoPath(tr, photo, out _);
         return new(Field("PROJECTNAAM"), Field("DEELGEBIED"), Field("GEMEENTE"), Field("PROJECTNR.CIRCET"),
             Field("PROJECTNR.OPDR."), Field("GET"), Field("TDD"), Field("OVERIGE2"), Field("OVERIGE1"), Field("TEKENINGNUMMER"), path);
@@ -372,6 +381,12 @@ internal static class StationLocationSheets
     internal static void RepairExistingSheets(Database db)
     {
         using var tr = db.TransactionManager.StartTransaction();
+        var dictionary = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+        if (dictionary.Contains(SheetRepairKey)) return;
+        var sheets = ReadSheets(db, tr);
+        var hasOverview = HasOverview(db, tr);
+        if (sheets.Count == 0 && !hasOverview) return;
+
         var signature = ReadSignatureLogo(db, tr);
         void Repair(string name, bool overview)
         {
@@ -383,7 +398,6 @@ internal static class StationLocationSheets
             WriteSignatureLogo(db, tr, layout, signature);
         }
 
-        var sheets = ReadSheets(db, tr);
         if (sheets.Count > 0)
         {
             var blocks = ModelBlocks(db, tr).Where(block => IsStationBlock(tr, block))
@@ -395,7 +409,13 @@ internal static class StationLocationSheets
                     UpdateCornerTable(db, tr, GetLayout(db, tr, sheet.Name), station, sheet.ShowCorners);
             }
         }
-        if (HasOverview(db, tr)) Repair(OverviewName, true);
+        if (hasOverview) Repair(OverviewName, true);
+        // Save the migration marker in the same transaction as the repaired sheets.
+        dictionary.UpgradeOpen();
+        using var data = new ResultBuffer(new TypedValue((int)DxfCode.Int16, (short)1));
+        var record = new Xrecord { Data = data };
+        dictionary.SetAt(SheetRepairKey, record);
+        tr.AddNewlyCreatedDBObject(record, true);
         tr.Commit();
     }
 
@@ -409,16 +429,26 @@ internal static class StationLocationSheets
             .OfType<BlockReference>().Where(station => IsStationBlock(tr, station))
             .ToLookup(station => station.Layer, StringComparer.OrdinalIgnoreCase);
         if (stations.Count == 0) return;
-        var updated = false;
+        var refreshMarkers = false;
         foreach (var sheet in ReadSheets(db, tr))
         {
             if (stations[sheet.Layer].FirstOrDefault() is not { } station) continue;
             var layout = GetLayout(db, tr, sheet.Name);
-            if (FindMapViewport(tr, layout) is { } viewport) Center(tr, viewport, station.Position);
+            if (FindMapViewport(tr, layout) is { } viewport)
+            {
+                if (viewport.ViewTarget != station.Position)
+                {
+                    Center(tr, viewport, station.Position);
+                    refreshMarkers = true;
+                }
+            }
+            else
+            {
+                refreshMarkers = true;
+            }
             UpdateCornerTable(db, tr, layout, station, sheet.ShowCorners);
-            updated = true;
         }
-        if (updated) RefreshMarkers(db, tr);
+        if (refreshMarkers) RefreshMarkers(db, tr);
         tr.Commit();
     }
 
@@ -803,16 +833,17 @@ internal static class StationLocationSheets
         return (Layout)tr.GetObject(dictionary.GetAt(name), mode);
     }
 
-    private static IEnumerable<Entity> Entities(Transaction tr, Layout layout) =>
+    private static IEnumerable<Entity> Entities(Transaction tr, Layout layout, string? dxfName = null) =>
         ((BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead)).Cast<ObjectId>()
-        .Where(IsLive).Select(id => tr.GetObject(id, OpenMode.ForRead)).OfType<Entity>();
+        .Where(id => IsLive(id) && (dxfName == null || id.ObjectClass.DxfName == dxfName))
+        .Select(id => tr.GetObject(id, OpenMode.ForRead)).OfType<Entity>();
 
     private static bool IsLive(ObjectId id) =>
         !id.IsNull && id.IsValid && !id.IsErased && !id.IsEffectivelyErased;
 
     private static Viewport? FindMapViewport(Transaction tr, Layout layout)
     {
-        var viewports = Entities(tr, layout).OfType<Viewport>().ToArray();
+        var viewports = Entities(tr, layout, "VIEWPORT").OfType<Viewport>().ToArray();
         return viewports.FirstOrDefault(vp => vp.Layer == NativeStationGeometry.ViewportLayer)
             ?? (layout.LayoutName == OverviewName
                 ? viewports.FirstOrDefault(vp => vp.Number != 1 && vp.Width > 400 && vp.Width < 425 && vp.Height > 240 && vp.Height < 250)
@@ -829,7 +860,7 @@ internal static class StationLocationSheets
     }
 
     private static BlockReference Title(Transaction tr, Layout layout) =>
-        Entities(tr, layout).OfType<BlockReference>().SingleOrDefault(block => BlockName(tr, block) is TitleBlock or NativeStationGeometry.TitleName)
+        Entities(tr, layout, "INSERT").OfType<BlockReference>().SingleOrDefault(block => BlockName(tr, block) is TitleBlock or NativeStationGeometry.TitleName)
         ?? throw new InvalidOperationException($"Layout ‘{layout.LayoutName}’ mist ‘{TitleBlock}’.");
 
     private static ObjectId Layer(Database db, Transaction tr, string name, bool location = false)
