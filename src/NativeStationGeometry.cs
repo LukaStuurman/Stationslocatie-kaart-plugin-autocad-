@@ -19,7 +19,7 @@ internal static class NativeStationGeometry
         var viewport = AppendMapViewport(db, tr, layout, overview);
         var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForWrite);
 
-        foreach (var shape in sheet.Entities.Where(shape => !IsFreeSpaceHatch(shape)))
+        foreach (var shape in sheet.Entities.Where(shape => !IsFreeSpaceHatch(shape) && !IsStrayLegendPolyline(shape)))
             AppendShape(space, tr, shape);
         RepairFreeSpaceLegend(tr, layout, overview);
 
@@ -134,6 +134,36 @@ internal static class NativeStationGeometry
         owner.AppendEntity(entity);
         tr.AddNewlyCreatedDBObject(entity, true);
         return entity;
+    }
+
+    private static readonly Point2d[] StrayLegendVertices =
+    [
+        new(265.066277972, 46.724045803),
+        new(265.466277972, 46.724045803),
+        new(265.466277972, 46.324045803)
+    ];
+
+    private static bool MatchesStrayLegendPolyline(Point2d[] vertices) =>
+        vertices.Length == StrayLegendVertices.Length &&
+        (vertices.Zip(StrayLegendVertices).All(pair => pair.First.GetDistanceTo(pair.Second) < 0.001) ||
+         vertices.Reverse().Zip(StrayLegendVertices).All(pair => pair.First.GetDistanceTo(pair.Second) < 0.001));
+
+    private static bool IsStrayLegendPolyline(Shape shape) =>
+        shape.K == "LWPOLYLINE" && !shape.Closed && shape.V.Length == StrayLegendVertices.Length &&
+        MatchesStrayLegendPolyline(shape.V.Select(vertex => new Point2d(vertex[0], vertex[1])).ToArray());
+
+    internal static void RemoveStrayLegendPolyline(Transaction tr, Layout layout)
+    {
+        var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+        foreach (var id in space.Cast<ObjectId>().Where(id => !id.IsErased && id.ObjectClass.DxfName == "LWPOLYLINE").ToArray())
+        {
+            var line = (Polyline)tr.GetObject(id, OpenMode.ForRead);
+            if (line.Closed || line.NumberOfVertices != StrayLegendVertices.Length ||
+                !MatchesStrayLegendPolyline(Enumerable.Range(0, line.NumberOfVertices).Select(line.GetPoint2dAt).ToArray())) continue;
+
+            if (!line.IsWriteEnabled) line.UpgradeOpen();
+            line.Erase();
+        }
     }
 
     private static bool IsFreeSpaceHatch(Shape shape) => shape.K == "HATCH" && shape.S == "ANSI31" && shape.C == 114;

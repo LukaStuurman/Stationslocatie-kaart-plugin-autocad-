@@ -372,6 +372,7 @@ internal static class StationLocationSheets
             var layout = GetLayout(db, tr, name);
             DisableLayoutGrid(tr, layout);
             NativeStationGeometry.RepairFreeSpaceLegend(tr, layout, overview);
+            NativeStationGeometry.RemoveStrayLegendPolyline(tr, layout);
         }
 
         var sheets = ReadSheets(db, tr);
@@ -412,18 +413,20 @@ internal static class StationLocationSheets
         var coordinates = NativeStationGeometry.StationCorners(station);
         const double bottom = 3.124045803; // Bottom edge of the cable legend in the detail sheet template.
         const double offset = bottom - 5;
+        const double legendLeft = 189.866277972;
+        const double left = legendLeft - 64;
         var cells = new List<(string Text, double X, double Y, double Height)>
         {
-            ("Hoekpunten trafo (m)", 122, 31 + offset, 2.6),
-            ("Punt", 122, 25 + offset, 2.1), ("X", 137, 25 + offset, 2.1), ("Y", 160, 25 + offset, 2.1)
+            ("Hoekpunten trafo (m)", left + 3, 31 + offset, 2.6),
+            ("Punt", left + 3, 25 + offset, 2.1), ("X", left + 18, 25 + offset, 2.1), ("Y", left + 41, 25 + offset, 2.1)
         };
         var culture = CultureInfo.GetCultureInfo("nl-NL");
         for (var index = 0; index < coordinates.Length; index++)
         {
             var y = 20 + offset - 4 * index;
-            cells.Add(($"C{index + 1}", 122, y, 2.1));
-            cells.Add((coordinates[index].X.ToString("F2", culture), 137, y, 2.1));
-            cells.Add((coordinates[index].Y.ToString("F2", culture), 160, y, 2.1));
+            cells.Add(($"C{index + 1}", left + 3, y, 2.1));
+            cells.Add((coordinates[index].X.ToString("F2", culture), left + 18, y, 2.1));
+            cells.Add((coordinates[index].Y.ToString("F2", culture), left + 41, y, 2.1));
         }
 
         var space = (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
@@ -446,11 +449,13 @@ internal static class StationLocationSheets
             tr.AddNewlyCreatedDBObject(entity, true);
         }
 
-        var border = new Polyline(4) { Closed = true };
-        var corners = new[] { new Point2d(119, bottom), new Point2d(183, bottom), new Point2d(183, 36 + offset), new Point2d(119, 36 + offset) };
+        // The cable legend supplies the right edge of the table.
+        var border = new Polyline(4);
+        var corners = new[] { new Point2d(legendLeft, bottom), new Point2d(left, bottom),
+            new Point2d(left, 36 + offset), new Point2d(legendLeft, 36 + offset) };
         for (var index = 0; index < corners.Length; index++) border.AddVertexAt(index, corners[index], 0, 0, 0);
         Add(border);
-        Add(new Line(new Point3d(119, 23.5 + offset, 0), new Point3d(183, 23.5 + offset, 0)));
+        Add(new Line(new Point3d(left, 23.5 + offset, 0), new Point3d(legendLeft, 23.5 + offset, 0)));
         foreach (var cell in cells)
             Add(new DBText { TextString = cell.Text, Height = cell.Height, Position = new Point3d(cell.X, cell.Y, 0) });
     }
