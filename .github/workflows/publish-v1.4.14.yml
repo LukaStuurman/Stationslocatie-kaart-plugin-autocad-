@@ -1,0 +1,25 @@
+name: Publish Stationslocaties 1.4.14
+on:
+  push:
+    branches: [release-v1.4.14]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish release with installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          unzip -tq Stationslocaties-AutoCAD.zip
+          grep -Fq 'AppVersion="1.4.14"' PackageContents.xml
+          gh release create v1.4.14 Stationslocaties-AutoCAD.zip --target 68bb82202a5cdc5c0556290e43b7f6a2d6f1c99d --title "Stationslocaties 1.4.14" --notes-file - <<'NOTES'
+          ## Nieuw in deze release
+
+          - Het vak Vrije ruimte is even groot als het vak Te plaatsen trafo. De groene rand en ANSI31-arcering gebruiken AutoCAD-kleur 95 en de arcering heeft schaal 0,2.
+          - Voer op bestaande bladen eenmaal STATIONLOCATIES uit en sla de DWG op om de legenda bij te werken.
+          - Deze versie bevat ook de recente verbeteringen voor trafonamen, het printericoon en de automatische teksthoogte van het tekeningnummer.
+          NOTES
+          gh release view v1.4.14 --json url,isDraft,assets
