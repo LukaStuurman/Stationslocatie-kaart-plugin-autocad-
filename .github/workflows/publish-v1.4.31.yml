@@ -1,0 +1,47 @@
+name: Publish Stationslocaties 1.4.31
+on:
+  push:
+    branches: [release-v1.4.31]
+    paths: ['.github/workflows/publish-v1.4.31.yml']
+permissions:
+  contents: write
+concurrency:
+  group: publish-stationslocaties-v1.4.31
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: bc53bd53257f2f9bf9ddf17f0329d212b05ef42e
+          persist-credentials: false
+      - name: Verify and publish installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' '10d40aeb6c63afc017a86fad9d6fd37db1221303b333c9b938327664616ad549' 'Stationslocaties-AutoCAD.zip' | sha256sum --check --strict
+          unzip -tq Stationslocaties-AutoCAD.zip
+          python3 -c 'import xml.etree.ElementTree as E; assert E.parse("PackageContents.xml").getroot().attrib["AppVersion"] == "1.4.31"'
+          gh release create v1.4.31 Stationslocaties-AutoCAD.zip --target bc53bd53257f2f9bf9ddf17f0329d212b05ef42e --title 'Stationslocaties 1.4.31 – Direct inzoomen bij kaartopmerkingen' --latest --notes-file - <<'NOTES'
+          ## Verbetering
+          
+          - **Kaartopmerking plaatsen** zoomt direct in op de rode cirkel van de geselecteerde trafo, vóór het invoeren van de tekst.
+          - De volledige cirkel blijft zichtbaar met ruimte eromheen, ook in een smal kaartvenster.
+          - De actuele positie van de gekozen voorkeur- of alternatieve locatie wordt gebruikt, ook als het trafoblok is verplaatst.
+          - De ingebouwde uitleg en handleiding zijn bijgewerkt.
+          
+          ## Installeren
+          
+          Download `Stationslocaties-AutoCAD.zip`, pak het bestand uit, sluit AutoCAD en voer `Installeren.cmd` uit. Start daarna AutoCAD opnieuw.
+          
+          Geschikt voor AutoCAD 2025, 2026 en 2027.
+          
+          ## Controle
+          
+          Beide Release-builds zijn geslaagd zonder waarschuwingen of fouten. De bediening is nog niet in AutoCAD zelf getest.
+          NOTES
+          gh release view v1.4.31 --json url,isDraft,assets
