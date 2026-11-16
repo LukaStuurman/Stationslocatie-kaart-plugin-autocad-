@@ -228,10 +228,10 @@ public sealed class Plugin
                         }
                         break;
                     case StationLocationAction.Note when selected != null:
+                        StationLocationSheets.ZoomToLocation(doc, selected);
                         var noteEditor = doc.Editor;
                         var note = noteEditor.GetString(new PromptStringOptions("\nKorte kaartopmerking: ") { AllowSpaces = true });
                         if (note.Status != PromptStatus.OK || string.IsNullOrWhiteSpace(note.StringResult)) break;
-                        LayoutManager.Current.CurrentLayout = "Model";
                         var pointResult = noteEditor.GetPoint("\nKies het beginpunt van de rode tekst binnen de cirkel van " + selected.Name + ": ");
                         if (pointResult.Status == PromptStatus.OK)
                         {

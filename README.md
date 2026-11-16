@@ -23,6 +23,7 @@ Download `Stationslocaties-AutoCAD.zip` uit deze repo, pak het bestand uit, slui
 - De laatst gebruikte fotomap wordt bij het opslaan in de project-DWG onthouden. De fotokiezer opent die map bij de volgende locatie.
 - Gebruik **PDOK** naast **Adres / locatie** in **Geselecteerd blad** om het adres van een bestaande locatie opnieuw op te zoeken.
 - Via **Geselecteerd blad** kun je één locatie bewerken of de kaart opnieuw centreren na het verplaatsen van een blok.
+- Kies **Kaartopmerking plaatsen** om meteen in te zoomen op de rode cirkel van de geselecteerde trafo. De volledige cirkel blijft zichtbaar met ruimte eromheen. Voer de tekst in en wijs daarna het beginpunt binnen de cirkel aan.
 
 Locatiefoto’s blijven rasterreferenties. Neem ze mee bij overdracht van de DWG. Het ingebouwde sjabloon bevat de A3-indeling en de vectoronderdelen. Projectfoto’s, logo’s en kaartachtergronden komen uit het eigen project.
 

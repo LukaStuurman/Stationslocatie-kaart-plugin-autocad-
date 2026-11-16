@@ -577,6 +577,23 @@ internal static class StationLocationSheets
     private static ObjectId NoteLayerId(LayerTable layers, StationSheet sheet) =>
         layers.Has(sheet.Layer + NoteLayerSuffix) ? layers[sheet.Layer + NoteLayerSuffix] : ObjectId.Null;
 
+    internal static void ZoomToLocation(Document doc, StationSheet sheet)
+    {
+        var position = Position(doc.Database, sheet);
+        LayoutManager.Current.CurrentLayout = "Model";
+        using var view = doc.Editor.GetCurrentView();
+        var aspectRatio = view.Width / view.Height;
+        if (!double.IsFinite(aspectRatio) || aspectRatio <= 0) aspectRatio = 1;
+
+        // Keep the complete marker circle visible, including in a narrow model viewport.
+        var span = MarkerRadius * 2 * 1.25;
+        view.Height = span / Math.Min(1, aspectRatio);
+        view.Width = view.Height * aspectRatio;
+        view.Target = position;
+        view.CenterPoint = Point2d.Origin;
+        doc.Editor.SetCurrentView(view);
+    }
+
     internal static void AddMapNote(Document doc, StationSheet sheet, string text, Point3d position)
     {
         var db = doc.Database;

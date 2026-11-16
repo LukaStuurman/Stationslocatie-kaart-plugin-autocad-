@@ -40,7 +40,7 @@ internal sealed class StationHelpDialog : Form
 
             Blad bewerken — wijzig onder meer de naam, VL/AL, datum, adres, foto en de zichtbaarheid van de hoekcoördinaten.
 
-            Kaartopmerking plaatsen — zet een rode tekst bij de trafo. Deze verschijnt op het eigen detailblad en blijft verborgen op Totaal.
+            Kaartopmerking plaatsen — zoomt meteen in op de rode cirkel van de geselecteerde trafo. Voer de tekst in en kies een punt binnen de cirkel. De rode tekst verschijnt op het eigen detailblad en blijft verborgen op Totaal.
 
             Locatie verwijderen — verwijder de geselecteerde locatie en het bijbehorende detailblad.
 
