@@ -26,413 +26,255 @@ public sealed class Plugin
         }
     }
 
-    [CommandMethod("STATIONLOCATIES", CommandFlags.Modal)]
+    [CommandMethod("STATIONLOCATIES", CommandFlags.Modal | CommandFlags.UsePickSet)]
     public void ShowStationLocations()
     {
         var doc = AcApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
         try { StationLocationSheets.RepairExistingSheets(doc.Database); }
         catch (System.Exception ex) { doc.Editor.WriteMessage("\nBladen bijwerken: " + ex.Message); }
-        StationSheet? selected = null;
-        while (true)
-        {
-            try
-            {
-                var sheets = StationLocationSheets.List(doc.Database);
-                var hasOverview = StationLocationSheets.HasOverview(doc.Database);
-                var withPhoto = StationLocationSheets.SheetsWithPhoto(doc.Database, sheets);
-                using var dialog = new StationLocationDialog(sheets, selected, hasOverview, withPhoto);
-                if (AcApp.ShowModalDialog(dialog) != DialogResult.OK) return;
-                selected = dialog.Selected;
-                switch (dialog.Action)
-                {
-                    case StationLocationAction.Add:
-                        var project = StationLocationSheets.ProjectFields(doc.Database, selected);
-                        using (var input = new StationFieldsDialog(project with
-                        {
-                            Date = StationFields.Today, Address = "", Notes = "", DrawingNumber = "", Photo = ""
-                        }, adding: true,
-                            trafo: selected?.Trafo ?? "1", preferred: !sheets.Any(s =>
-                                StationLocationSheets.SameTrafo(s.Trafo, selected?.Trafo ?? "1") && s.Alternative == 0),
-                            photoFolder: StationLocationSheets.PhotoFolder(doc.Database),
-                            existingPreferred: sheets.Where(s => s.Alternative == 0).Select(s => s.Trafo).ToHashSet(StringComparer.OrdinalIgnoreCase)))
-                        {
-                            if (AcApp.ShowModalDialog(input) != DialogResult.OK) break;
-                            var sheet = StationLocationSheets.Next(doc.Database, input.Trafo, input.Preferred);
-                            var fields = input.Fields;
-                            if (string.IsNullOrWhiteSpace(fields.DrawingNumber))
-                                fields = fields with { DrawingNumber = StationLocationSheets.DefaultDrawingNumber(sheet) };
-                            LayoutManager.Current.CurrentLayout = "Model";
-                            var editor = doc.Editor;
-                            var block = StationBlockLibrary.Read().Default;
-                            if (!StationLocationSheets.PickLocation(doc, block, out var point, out var rotation)) break;
-                            if (input.LookupAddress && string.IsNullOrWhiteSpace(fields.Address))
-                            {
-                                editor.WriteMessage("\nDichtstbijzijnd adres ophalen bij PDOK…");
-                                var result = PdokAddress.Lookup(point);
-                                if (result.Address != null) fields = fields with { Address = result.Address };
-                                editor.WriteMessage("\n" + result.Message);
-                            }
-                            StationLocationSheets.Create(doc, sheet, fields, new Point3d(point.X, point.Y, 0), rotation, block);
-                            selected = sheet;
-                            editor.Regen();
-                            editor.WriteMessage($"\nA3-layout ‘{sheet.Name}’ aangemaakt.");
-                        }
-                        break;
-                    case StationLocationAction.Edit when selected != null:
-                        using (var input = new StationFieldsDialog(StationLocationSheets.ReadFields(doc.Database, selected)
-                            .FillSharedFrom(StationLocationSheets.ProjectFields(doc.Database)),
-                            trafo: selected.Trafo, preferred: selected.Alternative == 0, alternativeNumber: selected.Alternative,
-                            photoFolder: StationLocationSheets.PhotoFolder(doc.Database),
-                            locate: () => StationLocationSheets.Position(doc.Database, selected)))
-                            if (AcApp.ShowModalDialog(input) == DialogResult.OK)
-                            {
-                                var plan = StationLocationSheets.PlanEdit(sheets, selected, input.Trafo, input.Preferred, input.AlternativeNumber);
-                                if (plan.Changes.Length > 1)
-                                {
-                                    var other = plan.Changes[1];
-                                    if (MessageBox.Show($"'{plan.Target.Name}' wordt de voorkeurslocatie. " +
-                                        $"De huidige voorkeurslocatie wordt '{other.After.Name}'. Doorgaan?", "Stationlocaties",
-                                        MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
-                                        break;
-                                }
-                                StationLocationSheets.Edit(doc, plan, input.Fields);
-                                selected = plan.Target;
-                                doc.Editor.Regen();
-                            }
-                        break;
-                    case StationLocationAction.EditAll:
-                        using (var table = new SheetTableDialog(StationLocationSheets.ReadSheetRows(doc.Database, sheets),
-                            StationLocationSheets.PhotoFolder(doc.Database)))
-                            if (AcApp.ShowModalDialog(table) == DialogResult.OK && table.Changes.Count > 0)
-                            {
-                                StationLocationSheets.UpdateSheetRows(doc.Database, table.Changes, table.LastPhoto);
-                                doc.Editor.Regen();
-                            }
-                        break;
-                    case StationLocationAction.References:
-                        using (var references = new StationReferenceDialog())
-                        {
-                            if (AcApp.ShowModalDialog(references) != DialogResult.OK) break;
-                            const string filter = "AutoCAD-tekening (*.dwg)|*.dwg";
-                            if (references.AttachExisting)
-                            {
-                                using var open = new OpenFileDialog { Filter = filter, CheckFileExists = true };
-                                if (open.ShowDialog() == DialogResult.OK)
-                                {
-                                    StationReferences.Attach(doc, open.FileName);
-                                    doc.Editor.Regen();
-                                }
-                                break;
-                            }
+        StationPalette.Show();
+    }
 
-                            string? klicFolder = null;
-                            if (references.Kind == MapKind.KLIC || references.CreateAll)
-                            {
-                                using var folder = new FolderBrowserDialog { Description = "Kies de map van de uitgepakte KLIC-levering",
-                                    UseDescriptionForTitle = true, ShowNewFolderButton = false };
-                                if (folder.ShowDialog() != DialogResult.OK) break;
-                                klicFolder = folder.SelectedPath;
-                            }
-                            if (references.CreateAll)
-                            {
-                                using var output = new FolderBrowserDialog { Description = "Kies de uitvoermap voor KLIC, Topo en Percelen",
-                                    UseDescriptionForTitle = true };
-                                if (Path.IsPathFullyQualified(doc.Database.Filename))
-                                    output.InitialDirectory = Path.GetDirectoryName(doc.Database.Filename) ?? "";
-                                if (output.ShowDialog() != DialogResult.OK) break;
-                                StationReferences.QueueAll(doc, output.SelectedPath, klicFolder!);
-                                return;
-                            }
-                            using var save = new SaveFileDialog { Filter = filter, DefaultExt = "dwg",
-                                FileName = references.Kind + " " + Path.GetFileNameWithoutExtension(doc.Name) + ".dwg" };
-                            if (Path.IsPathFullyQualified(doc.Database.Filename))
-                                save.InitialDirectory = Path.GetDirectoryName(doc.Database.Filename);
-                            if (save.ShowDialog() != DialogResult.OK) break;
-                            if (klicFolder != null)
-                            {
-                                StationReferences.QueueCreate(doc, save.FileName, default, MapKind.KLIC, klicFolder);
-                                return;
-                            }
-                            LayoutManager.Current.CurrentLayout = "Model";
-                            var first = doc.Editor.GetPoint("\nKies de eerste hoek van het kaartgebied: ");
-                            if (first.Status != PromptStatus.OK) break;
-                            var second = doc.Editor.GetCorner("\nKies de tegenoverliggende hoek: ", first.Value);
-                            if (second.Status != PromptStatus.OK) break;
-                            var ucs = doc.Editor.CurrentUserCoordinateSystem;
-                            var area = ParcelArea.FromCorners(first.Value.TransformBy(ucs), second.Value.TransformBy(ucs));
-                            StationReferences.QueueCreate(doc, save.FileName, area, references.Kind);
-                            return;
-                        }
-                    case StationLocationAction.Signature:
-                        using (var signature = new StationSignatureDialog(StationLocationSheets.ReadSignatureLogo(doc.Database)))
-                            if (AcApp.ShowModalDialog(signature) == DialogResult.OK)
-                            {
-                                StationLocationSheets.ApplySignatureLogo(doc.Database, signature.SelectedKey);
-                                doc.Editor.Regen();
-                            }
-                        break;
-                    case StationLocationAction.Client:
-                        using (var clientDialog = new StationClientDialog(StationLocationSheets.ReadClient(doc.Database)))
-                            if (AcApp.ShowModalDialog(clientDialog) == DialogResult.OK)
-                            {
-                                StationLocationSheets.ApplyClient(doc.Database, clientDialog.Applied);
-                                doc.Editor.Regen();
-                            }
-                        break;
-                    case StationLocationAction.Project:
-                        using (var input = new StationFieldsDialog(StationLocationSheets.ProjectFields(doc.Database), project: true, showOverviewFields: hasOverview))
-                            if (AcApp.ShowModalDialog(input) == DialogResult.OK)
-                                StationLocationSheets.UpdateProject(doc.Database, input.Fields);
-                        break;
-                    case StationLocationAction.Delete when selected != null:
-                        if (MessageBox.Show($"Locatie en blad ‘{selected.Name}’ verwijderen?", "Stationlocaties",
-                            MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+    // Palette buttons enter the normal document command context before prompting or editing.
+    [CommandMethod("STATIONLOCATIESACTIE", CommandFlags.Modal | CommandFlags.UsePickSet)]
+    public void RunStationPaletteAction() => StationPalette.ExecutePending();
+
+    internal static StationSheet? ExecuteAction(Autodesk.AutoCAD.ApplicationServices.Document doc,
+        StationLocationAction action, StationSheet? selected)
+    {
+        var sheets = StationLocationSheets.List(doc.Database);
+        var hasOverview = StationLocationSheets.HasOverview(doc.Database);
+        if (selected != null)
+        {
+            selected = sheets.FirstOrDefault(sheet => sheet.Layer.Equals(selected.Layer, StringComparison.OrdinalIgnoreCase));
+            if (selected == null) throw new InvalidOperationException("Deze locatie bestaat niet meer. Kies een andere locatie.");
+        }
+        switch (action)
+        {
+            case StationLocationAction.AddAlternative when selected != null:
+            case StationLocationAction.Add:
+                var project = StationLocationSheets.ProjectFields(doc.Database, selected);
+                using (var input = new StationFieldsDialog(project with
+                {
+                    Date = StationFields.Today, Address = "", Notes = "", DrawingNumber = "", Photo = ""
+                }, adding: true,
+                    trafo: selected?.Trafo ?? "1", preferred: action != StationLocationAction.AddAlternative && !sheets.Any(s =>
+                        StationLocationSheets.SameTrafo(s.Trafo, selected?.Trafo ?? "1") && s.Alternative == 0),
+                    photoFolder: StationLocationSheets.PhotoFolder(doc.Database),
+                    existingPreferred: sheets.Where(s => s.Alternative == 0).Select(s => s.Trafo).ToHashSet(StringComparer.OrdinalIgnoreCase)))
+                {
+                    if (AcApp.ShowModalDialog(input) != DialogResult.OK) break;
+                    var sheet = StationLocationSheets.Next(doc.Database, input.Trafo, input.Preferred);
+                    var fields = input.Fields;
+                    if (string.IsNullOrWhiteSpace(fields.DrawingNumber))
+                        fields = fields with { DrawingNumber = StationLocationSheets.DefaultDrawingNumber(sheet) };
+                    LayoutManager.Current.CurrentLayout = "Model";
+                    var editor = doc.Editor;
+                    var block = StationBlockLibrary.Read().Default;
+                    if (!StationLocationSheets.PickLocation(doc, block, out var point, out var rotation)) break;
+                    if (input.LookupAddress && string.IsNullOrWhiteSpace(fields.Address))
+                    {
+                        editor.WriteMessage("\nDichtstbijzijnd adres ophalen bij PDOK…");
+                        var result = PdokAddress.Lookup(point);
+                        if (result.Address != null) fields = fields with { Address = result.Address };
+                        editor.WriteMessage("\n" + result.Message);
+                    }
+                    StationLocationSheets.Create(doc, sheet, fields, new Point3d(point.X, point.Y, 0), rotation, block);
+                    selected = sheet;
+                    editor.Regen();
+                    editor.WriteMessage($"\nA3-layout ‘{sheet.Name}’ aangemaakt.");
+                }
+                break;
+            case StationLocationAction.Edit when selected != null:
+                using (var input = new StationFieldsDialog(StationLocationSheets.ReadFields(doc.Database, selected)
+                    .FillSharedFrom(StationLocationSheets.ProjectFields(doc.Database)),
+                    trafo: selected.Trafo, preferred: selected.Alternative == 0, alternativeNumber: selected.Alternative,
+                    photoFolder: StationLocationSheets.PhotoFolder(doc.Database),
+                    locate: () => StationLocationSheets.Position(doc.Database, selected)))
+                    if (AcApp.ShowModalDialog(input) == DialogResult.OK)
+                    {
+                        var plan = StationLocationSheets.PlanEdit(sheets, selected, input.Trafo, input.Preferred, input.AlternativeNumber);
+                        if (plan.Changes.Length > 1)
                         {
-                            StationLocationSheets.Delete(doc, selected);
-                            selected = null;
+                            var other = plan.Changes[1];
+                            if (MessageBox.Show($"'{plan.Target.Name}' wordt de voorkeurslocatie. " +
+                                $"De huidige voorkeurslocatie wordt '{other.After.Name}'. Doorgaan?", "Stationlocaties",
+                                MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                                break;
+                        }
+                        StationLocationSheets.Edit(doc, plan, input.Fields);
+                        selected = plan.Target;
+                        doc.Editor.Regen();
+                    }
+                break;
+            case StationLocationAction.EditAll:
+                using (var table = new SheetTableDialog(StationLocationSheets.ReadSheetRows(doc.Database, sheets),
+                    StationLocationSheets.PhotoFolder(doc.Database)))
+                    if (AcApp.ShowModalDialog(table) == DialogResult.OK && table.Changes.Count > 0)
+                    {
+                        StationLocationSheets.UpdateSheetRows(doc.Database, table.Changes, table.LastPhoto);
+                        doc.Editor.Regen();
+                    }
+                break;
+            case StationLocationAction.References:
+                using (var references = new StationReferenceDialog())
+                {
+                    if (AcApp.ShowModalDialog(references) != DialogResult.OK) break;
+                    const string filter = "AutoCAD-tekening (*.dwg)|*.dwg";
+                    if (references.AttachExisting)
+                    {
+                        using var open = new OpenFileDialog { Filter = filter, CheckFileExists = true };
+                        if (open.ShowDialog() == DialogResult.OK)
+                        {
+                            StationReferences.Attach(doc, open.FileName);
                             doc.Editor.Regen();
                         }
                         break;
-                    case StationLocationAction.Blocks:
-                        using (var library = new StationBlockDialog(StationBlockLibrary.Read(), selected))
-                        {
-                            if (AcApp.ShowModalDialog(library) != DialogResult.OK) break;
-                            switch (library.Action)
-                            {
-                                case BlockLibraryAction.Register:
-                                    var corners = MessageBox.Show("Wil je vier hoekpunten C1–C4 aanwijzen?", "Trafoblokken",
-                                        MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-                                    if (corners == DialogResult.Cancel) break;
-                                    LayoutManager.Current.CurrentLayout = "Model";
-                                    StationBlockLibrary.Register(doc, corners == DialogResult.Yes);
-                                    break;
-                                case BlockLibraryAction.Use:
-                                    StationBlockLibrary.SetDefault(library.Choice);
-                                    break;
-                                case BlockLibraryAction.Replace when selected != null:
-                                    StationLocationSheets.ApplyBlockChoice(doc.Database, selected, library.Choice);
-                                    doc.Editor.Regen();
-                                    break;
-                                case BlockLibraryAction.Remove when library.Choice is { } choice:
-                                    if (MessageBox.Show($"'{choice.Name}' uit de bibliotheek verwijderen?", "Trafoblokken",
-                                        MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
-                                        StationBlockLibrary.Remove(choice);
-                                    break;
-                                case BlockLibraryAction.ToggleCorners when selected != null:
-                                    StationLocationSheets.ToggleCornerTable(doc.Database, selected);
-                                    selected = selected with { ShowCorners = !selected.ShowCorners };
-                                    doc.Editor.Regen();
-                                    break;
-                            }
-                        }
-                        break;
-                    case StationLocationAction.Note when selected != null:
-                        StationLocationSheets.ZoomToLocation(doc, selected);
-                        var noteEditor = doc.Editor;
-                        var note = noteEditor.GetString(new PromptStringOptions("\nKorte kaartopmerking: ") { AllowSpaces = true });
-                        if (note.Status != PromptStatus.OK || string.IsNullOrWhiteSpace(note.StringResult)) break;
-                        var pointResult = noteEditor.GetPoint("\nKies het beginpunt van de rode tekst binnen de cirkel van " + selected.Name + ": ");
-                        if (pointResult.Status == PromptStatus.OK)
-                        {
-                            StationLocationSheets.AddMapNote(doc, selected, note.StringResult.Trim(),
-                                pointResult.Value.TransformBy(noteEditor.CurrentUserCoordinateSystem));
-                            noteEditor.Regen();
-                        }
-                        break;
-                    case StationLocationAction.Plot:
-                        var names = sheets.Select(sheet => sheet.Name).ToList();
-                        if (hasOverview)
-                            names.Insert(0, StationLocationSheets.OverviewName);
-                        using (var input = new StationPlotDialog(doc.Database, names))
-                            if (AcApp.ShowModalDialog(input) == DialogResult.OK && input.Options is { } options)
-                            {
-                                var count = StationPlot.Export(doc, options);
-                                MessageBox.Show($"{count} PDF’s opgeslagen in {options.Folder}", "Stationlocaties");
-                            }
-                        break;
-                    case StationLocationAction.Open when selected != null:
-                        StationLocationSheets.OpenSheet(doc, selected.Name);
-                        doc.Editor.Regen();
-                        return;
-                    case StationLocationAction.Overview:
-                        StationLocationSheets.MakeOverview(doc);
-                        doc.Editor.Regen();
-                        return;
+                    }
+
+                    string? klicFolder = null;
+                    if (references.Kind == MapKind.KLIC || references.CreateAll)
+                    {
+                        using var folder = new FolderBrowserDialog { Description = "Kies de map van de uitgepakte KLIC-levering",
+                            UseDescriptionForTitle = true, ShowNewFolderButton = false };
+                        if (folder.ShowDialog() != DialogResult.OK) break;
+                        klicFolder = folder.SelectedPath;
+                    }
+                    if (references.CreateAll)
+                    {
+                        using var output = new FolderBrowserDialog { Description = "Kies de uitvoermap voor KLIC, Topo en Percelen",
+                            UseDescriptionForTitle = true };
+                        if (Path.IsPathFullyQualified(doc.Database.Filename))
+                            output.InitialDirectory = Path.GetDirectoryName(doc.Database.Filename) ?? "";
+                        if (output.ShowDialog() != DialogResult.OK) break;
+                        StationReferences.QueueAll(doc, output.SelectedPath, klicFolder!);
+                        return selected;
+                    }
+                    using var save = new SaveFileDialog { Filter = filter, DefaultExt = "dwg",
+                        FileName = references.Kind + " " + Path.GetFileNameWithoutExtension(doc.Name) + ".dwg" };
+                    if (Path.IsPathFullyQualified(doc.Database.Filename))
+                        save.InitialDirectory = Path.GetDirectoryName(doc.Database.Filename);
+                    if (save.ShowDialog() != DialogResult.OK) break;
+                    if (klicFolder != null)
+                    {
+                        StationReferences.QueueCreate(doc, save.FileName, default, MapKind.KLIC, klicFolder);
+                        return selected;
+                    }
+                    LayoutManager.Current.CurrentLayout = "Model";
+                    var first = doc.Editor.GetPoint("\nKies de eerste hoek van het kaartgebied: ");
+                    if (first.Status != PromptStatus.OK) break;
+                    var second = doc.Editor.GetCorner("\nKies de tegenoverliggende hoek: ", first.Value);
+                    if (second.Status != PromptStatus.OK) break;
+                    var ucs = doc.Editor.CurrentUserCoordinateSystem;
+                    var area = ParcelArea.FromCorners(first.Value.TransformBy(ucs), second.Value.TransformBy(ucs));
+                    StationReferences.QueueCreate(doc, save.FileName, area, references.Kind);
+                    return selected;
                 }
-            }
-            catch (System.Exception ex)
-            {
-                doc.Editor.WriteMessage("\nStationlocaties: " + ex.Message);
-                MessageBox.Show(ex.Message, "Techbase Stationlocaties", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
+            case StationLocationAction.Signature:
+                using (var signature = new StationSignatureDialog(StationLocationSheets.ReadSignatureLogo(doc.Database)))
+                    if (AcApp.ShowModalDialog(signature) == DialogResult.OK)
+                    {
+                        StationLocationSheets.ApplySignatureLogo(doc.Database, signature.SelectedKey);
+                        doc.Editor.Regen();
+                    }
+                break;
+            case StationLocationAction.Client:
+                using (var clientDialog = new StationClientDialog(StationLocationSheets.ReadClient(doc.Database)))
+                    if (AcApp.ShowModalDialog(clientDialog) == DialogResult.OK)
+                    {
+                        StationLocationSheets.ApplyClient(doc.Database, clientDialog.Applied);
+                        doc.Editor.Regen();
+                    }
+                break;
+            case StationLocationAction.Project:
+                using (var input = new StationFieldsDialog(StationLocationSheets.ProjectFields(doc.Database), project: true, showOverviewFields: hasOverview))
+                    if (AcApp.ShowModalDialog(input) == DialogResult.OK)
+                        StationLocationSheets.UpdateProject(doc.Database, input.Fields);
+                break;
+            case StationLocationAction.Delete when selected != null:
+                if (MessageBox.Show($"Locatie en blad ‘{selected.Name}’ verwijderen?", "Stationlocaties",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                {
+                    StationLocationSheets.Delete(doc, selected);
+                    selected = null;
+                    doc.Editor.Regen();
+                }
+                break;
+            case StationLocationAction.Blocks:
+                using (var library = new StationBlockDialog(StationBlockLibrary.Read(), selected))
+                {
+                    if (AcApp.ShowModalDialog(library) != DialogResult.OK) break;
+                    switch (library.Action)
+                    {
+                        case BlockLibraryAction.Register:
+                            var corners = MessageBox.Show("Wil je vier hoekpunten C1–C4 aanwijzen?", "Trafoblokken",
+                                MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                            if (corners == DialogResult.Cancel) break;
+                            LayoutManager.Current.CurrentLayout = "Model";
+                            StationBlockLibrary.Register(doc, corners == DialogResult.Yes);
+                            break;
+                        case BlockLibraryAction.Use:
+                            StationBlockLibrary.SetDefault(library.Choice);
+                            break;
+                        case BlockLibraryAction.Replace when selected != null:
+                            StationLocationSheets.ApplyBlockChoice(doc.Database, selected, library.Choice);
+                            doc.Editor.Regen();
+                            break;
+                        case BlockLibraryAction.Remove when library.Choice is { } choice:
+                            if (MessageBox.Show($"'{choice.Name}' uit de bibliotheek verwijderen?", "Trafoblokken",
+                                MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                                StationBlockLibrary.Remove(choice);
+                            break;
+                        case BlockLibraryAction.ToggleCorners when selected != null:
+                            StationLocationSheets.ToggleCornerTable(doc.Database, selected);
+                            selected = selected with { ShowCorners = !selected.ShowCorners };
+                            doc.Editor.Regen();
+                            break;
+                    }
+                }
+                break;
+            case StationLocationAction.Note when selected != null:
+                StationLocationSheets.ZoomToLocation(doc, selected);
+                var noteEditor = doc.Editor;
+                var note = noteEditor.GetString(new PromptStringOptions("\nKorte kaartopmerking: ") { AllowSpaces = true });
+                if (note.Status != PromptStatus.OK || string.IsNullOrWhiteSpace(note.StringResult)) break;
+                var pointResult = noteEditor.GetPoint("\nKies het beginpunt van de rode tekst binnen de cirkel van " + selected.Name + ": ");
+                if (pointResult.Status == PromptStatus.OK)
+                {
+                    StationLocationSheets.AddMapNote(doc, selected, note.StringResult.Trim(),
+                        pointResult.Value.TransformBy(noteEditor.CurrentUserCoordinateSystem));
+                    noteEditor.Regen();
+                }
+                break;
+            case StationLocationAction.Plot:
+                var names = sheets.Select(sheet => sheet.Name).ToList();
+                if (hasOverview)
+                    names.Insert(0, StationLocationSheets.OverviewName);
+                using (var input = new StationPlotDialog(doc.Database, names))
+                    if (AcApp.ShowModalDialog(input) == DialogResult.OK && input.Options is { } options)
+                    {
+                        var count = StationPlot.Export(doc, options);
+                        MessageBox.Show($"{count} PDF’s opgeslagen in {options.Folder}", "Stationlocaties");
+                    }
+                break;
+            case StationLocationAction.Zoom when selected != null:
+                StationLocationSheets.ZoomToLocation(doc, selected);
+                return selected;
+            case StationLocationAction.Open when selected != null:
+                StationLocationSheets.OpenSheet(doc, selected.Name);
+                doc.Editor.Regen();
+                return selected;
+            case StationLocationAction.Overview:
+                StationLocationSheets.MakeOverview(doc);
+                doc.Editor.Regen();
+                return selected;
         }
+        return selected;
     }
 }
 
-internal enum StationLocationAction { Add, Edit, EditAll, Delete, Project, Open, Overview, Plot, Note, Blocks, Client, References, Signature }
-
-internal sealed class StationLocationDialog : Form
-{
-    private readonly ToolTip toolTips = new();
-    private readonly ListView locations = new() { View = View.Details, Dock = DockStyle.Fill, FullRowSelect = true, MultiSelect = false, HideSelection = false };
-    internal StationSheet? Selected => locations.SelectedItems.Count == 1 ? (StationSheet?)locations.SelectedItems[0].Tag : null;
-    internal StationLocationAction Action { get; private set; }
-
-    internal StationLocationDialog(List<StationSheet> sheets, StationSheet? previous, bool hasOverview, HashSet<string> withPhoto)
-    {
-        Text = "Techbase | Stationlocaties";
-        StartPosition = FormStartPosition.CenterParent;
-        AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(1000, 580);
-        MinimumSize = new Size(795, 560);
-        BackColor = StationTheme.Canvas;
-        ForeColor = StationTheme.Ink;
-        Font = new Font("Segoe UI", 9F);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 2, Padding = new Padding(20) };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 242));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var incomplete = sheets.GroupBy(sheet => sheet.Trafo, StringComparer.OrdinalIgnoreCase).Where(group =>
-            !group.Any(sheet => sheet.Alternative == 0) || !group.Any(sheet => sheet.Alternative > 0))
-            .Select(group => StationLocationSheets.TrafoLabel(group.Key));
-        var pending = string.Join(", ", incomplete);
-        var message = sheets.Count == 0
-            ? "Begin met een voorkeurslocatie (VL). Voeg daarna één of meer alternatieve locaties (AL) toe."
-            : string.IsNullOrEmpty(pending) ? "Alle trafo’s hebben een VL en minstens één AL."
-                : "VL of AL ontbreekt bij " + pending + ".";
-        var missing = sheets.Count - withPhoto.Count;
-        var header = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 2, Margin = Padding.Empty };
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
-        header.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        header.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
-        header.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        header.Controls.Add(new Label { Text = "Trafolocatiekaarten", Dock = DockStyle.Fill, Font = new Font("Segoe UI", 17F, FontStyle.Bold) }, 0, 0);
-        var info = new Button { Text = "ⓘ  Info", Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 4),
-            AccessibleName = "Informatie over Stationlocaties" };
-        header.Controls.Add(info, 1, 0);
-        StationTheme.StyleButtons(header, info);
-        toolTips.SetToolTip(info, "Functies en automatische updates");
-        info.Click += (_, _) =>
-        {
-            using var help = new StationHelpDialog();
-            help.ShowDialog(this);
-        };
-        var status = new Label { Text = message, ForeColor = StationTheme.Muted, Dock = DockStyle.Fill, AutoEllipsis = true };
-        header.Controls.Add(status, 0, 1);
-        header.SetColumnSpan(status, 2);
-        var summary = $"{sheets.Count} locatiebladen  ·  {withPhoto.Count} met foto";
-        if (missing > 0) summary += $"  ·  {missing} zonder foto";
-        var photoStatus = new Label { Text = summary, ForeColor = missing > 0 ? StationTheme.Accent : StationTheme.Muted,
-            Dock = DockStyle.Fill, AutoEllipsis = true };
-        header.Controls.Add(photoStatus, 0, 2);
-        header.SetColumnSpan(photoStatus, 2);
-        layout.Controls.Add(header, 0, 0);
-        layout.SetColumnSpan(header, 2);
-
-        locations.BorderStyle = BorderStyle.FixedSingle;
-        locations.HeaderStyle = ColumnHeaderStyle.Nonclickable;
-        locations.Margin = new Padding(0, 0, 16, 0);
-        locations.Columns.Add("Blad", 180);
-        locations.Columns.Add("Locatietype", 195);
-        locations.Columns.Add("Locatiefoto", 115);
-        locations.BeginUpdate();
-        foreach (var sheet in sheets)
-        {
-            var hasPhoto = withPhoto.Contains(sheet.Name);
-            var kind = sheet.Alternative switch
-            {
-                0 => "Voorkeurslocatie",
-                1 => "Alternatieve locatie",
-                _ => "Alternatieve locatie " + sheet.Alternative
-            };
-            var item = new ListViewItem(new[] { sheet.Name, kind, hasPhoto ? "Aanwezig" : "Ontbreekt" })
-                { Tag = sheet };
-            if (locations.Items.Count % 2 != 0) item.BackColor = StationTheme.Canvas;
-            if (!hasPhoto)
-            {
-                item.UseItemStyleForSubItems = false;
-                item.SubItems[2].ForeColor = Color.Firebrick;
-            }
-            locations.Items.Add(item);
-            item.Selected = sheet.Name == previous?.Name;
-        }
-        if (locations.SelectedItems.Count == 0 && locations.Items.Count > 0 && previous == null)
-            locations.Items[0].Selected = true;
-        locations.EndUpdate();
-        layout.Controls.Add(locations, 0, 1);
-        var sidebar = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(12), Margin = Padding.Empty };
-        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoScroll = true, Margin = Padding.Empty };
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        int actionRow = 0;
-        void Group(string caption)
-        {
-            actions.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-            actions.Controls.Add(new Label { Text = caption, Dock = DockStyle.Fill, ForeColor = StationTheme.Muted,
-                TextAlign = ContentAlignment.BottomLeft, Margin = new Padding(0, 0, 0, 4) }, 0, actionRow++);
-        }
-
-        Button Add(string caption, StationLocationAction action, bool enabled = true)
-        {
-            var button = new Button { Text = caption, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(0, 0, 0, 4), Enabled = enabled };
-            button.Click += (_, _) => Choose(action);
-            actions.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));
-            actions.Controls.Add(button, 0, actionRow++);
-            return button;
-        }
-
-        Group("Locaties");
-        var add = Add("Locatie plaatsen", StationLocationAction.Add);
-        var open = Add("Open blad", StationLocationAction.Open, false);
-        var edit = Add("Blad bewerken", StationLocationAction.Edit, false);
-        var note = Add("Kaartopmerking plaatsen", StationLocationAction.Note, false);
-        var delete = Add("Locatie verwijderen", StationLocationAction.Delete, false);
-        Group("Project");
-        Add("Opdrachtgevers beheren", StationLocationAction.Client);
-        Add("Paraaflogo beheren", StationLocationAction.Signature);
-        Add("Kaartreferenties maken", StationLocationAction.References);
-        Add("Trafoblokken beheren", StationLocationAction.Blocks);
-        Add("Alle bladen bewerken", StationLocationAction.EditAll, sheets.Count > 0);
-        Add("Projectgegevens", StationLocationAction.Project, sheets.Count > 0);
-        Group("Uitvoer");
-        Add(hasOverview ? "Totaal vernieuwen" : "Totaal maken", StationLocationAction.Overview, sheets.Count > 0 || hasOverview);
-        var plot = Add("\uE749", StationLocationAction.Plot, sheets.Count > 0 || hasOverview);
-        plot.Font = new Font("Segoe MDL2 Assets", 14F);
-        plot.TextAlign = ContentAlignment.MiddleCenter;
-        plot.AccessibleName = "Bladen plotten";
-        toolTips.SetToolTip(plot, "Bladen plotten");
-        var close = new Button { Text = "Sluiten", Dock = DockStyle.Bottom, Height = 32, DialogResult = DialogResult.Cancel };
-        sidebar.Controls.Add(actions);
-        sidebar.Controls.Add(close);
-        sidebar.Controls.Add(new Label { Text = "Gemaakt door Luka Stuurman", Dock = DockStyle.Bottom, Height = 25,
-            ForeColor = StationTheme.Muted, TextAlign = ContentAlignment.MiddleCenter });
-        layout.Controls.Add(sidebar, 1, 1);
-        StationTheme.StyleButtons(sidebar, add, delete);
-        CancelButton = close;
-
-        void UpdateSelection() => edit.Enabled = open.Enabled = note.Enabled = delete.Enabled = Selected != null;
-        locations.SelectedIndexChanged += (_, _) => UpdateSelection();
-        Shown += (_, _) => UpdateSelection();
-        locations.DoubleClick += (_, _) => { if (Selected != null) Choose(StationLocationAction.Open); };
-        Controls.Add(layout);
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing) toolTips.Dispose();
-        base.Dispose(disposing);
-    }
-
-    private void Choose(StationLocationAction action)
-    {
-        Action = action;
-        DialogResult = DialogResult.OK;
-        Close();
-    }
-}
+internal enum StationLocationAction { Add, AddAlternative, Zoom, Edit, EditAll, Delete, Project, Open, Overview, Plot, Note, Blocks, Client, References, Signature }
 
 internal sealed class StationFieldsDialog : Form
 {

@@ -4,7 +4,18 @@ Zelfstandige AutoCAD-plug-in voor het plaatsen van trafolocaties en het maken va
 
 ## Installatie
 
-Download `Stationslocaties-AutoCAD.zip` uit deze repo, pak het bestand uit, sluit AutoCAD en voer `Installeren.cmd` uit. Start AutoCAD 2025, 2026 of 2027 en voer `STATIONLOCATIES` uit. Het eigen commando kan naast Techbase Blocks worden gebruikt.
+Download `Stationslocaties-AutoCAD.zip` uit deze repo, pak het bestand uit, sluit AutoCAD en voer `Installeren.cmd` uit. Start AutoCAD 2025, 2026 of 2027 en voer `STATIONLOCATIES` uit. Het eigen commando kan naast Techbase Blocks worden gebruikt. Het opent een vast zijpaneel; de tekening blijft beschikbaar terwijl het paneel openstaat.
+
+## Zijpaneel gebruiken
+
+- Het paneel opent rechts naast de tekening. Sleep de titelbalk om het links te koppelen of los te plaatsen; met de punaise kun je het automatisch laten inschuiven. `STATIONLOCATIES` opent hetzelfde paneel opnieuw.
+- Zoek op stationnummer, bladnaam, adres of deelgebied. Filter op **Alle locaties**, **Voorkeurslocaties (VL)**, **Alternatieven (AL)** of **Zonder foto**.
+- Klik op een locatie om naar de rode cirkel in modelruimte te zoomen. Dubbelklik of druk op Enter om het detailblad te openen.
+- Selecteer een trafoblok in de tekening om de bijbehorende locatie in het paneel te tonen. Een filter dat die locatie verbergt wordt dan gewist.
+- Gebruik **Bewerken**, **Alternatief toevoegen** of **Kaartopmerking** voor de geselecteerde locatie. Het paneel blijft na de handeling beschikbaar. Tijdens een lopende AutoCAD-opdracht zijn acties tijdelijk uitgeschakeld.
+- Onder de lijst staan een fotovoorbeeld en het laatst door AutoCAD opgeslagen bladvoorbeeld. Heeft een nieuw blad nog geen miniatuur, open dan het blad om de kaart te bekijken.
+- Onder **Project en uitvoer** staan de bestaande functies voor alle bladen, projectgegevens, opdrachtgevers, paraaflogo’s, kaartreferenties, trafoblokken, Totaal en plotten.
+- Bij wisselen tussen open DWG’s toont het paneel de locaties uit de actieve tekening.
 
 ## Locaties maken
 
@@ -19,17 +30,18 @@ Download `Stationslocaties-AutoCAD.zip` uit deze repo, pak het bestand uit, slui
 
 - Open **Alle bladen bewerken** voor de tabel met Totaal en alle VL- en AL-bladen. Wijzig datums, adressen, opmerkingen, tekeningnummers en fotopaden in één sessie. Dubbelklik in een fotocel om een bestand te kiezen. Maak de fotocel leeg om de foto te verwijderen.
 - Gebruik **Vandaag voor alle bladen** om alle datums in de tabel te vullen. De wijzigingen worden pas toegepast met **Opslaan**.
-- Projectnaam, deelgebied, gemeente, beide projectnummers en tekenaarsinitialen worden uit bestaande onderhoeken ingevuld. Sla een wijziging op vanuit **Geselecteerd blad** of **Projectgegevens** om de gedeelde waarden in alle onderhoeken bij te werken.
+- Projectnaam, deelgebied, gemeente, beide projectnummers en tekenaarsinitialen worden uit bestaande onderhoeken ingevuld. Sla een wijziging op vanuit **Bewerken** of **Projectgegevens** om de gedeelde waarden in alle onderhoeken bij te werken.
 - De laatst gebruikte fotomap wordt bij het opslaan in de project-DWG onthouden. De fotokiezer opent die map bij de volgende locatie.
-- Gebruik **PDOK** naast **Adres / locatie** in **Geselecteerd blad** om het adres van een bestaande locatie opnieuw op te zoeken.
-- Via **Geselecteerd blad** kun je één locatie bewerken of de kaart opnieuw centreren na het verplaatsen van een blok.
-- Kies **Kaartopmerking plaatsen** om meteen in te zoomen op de rode cirkel van de geselecteerde trafo. De volledige cirkel blijft zichtbaar met ruimte eromheen. Voer de tekst in en wijs daarna het beginpunt binnen de cirkel aan.
+- Gebruik **PDOK** naast **Adres / locatie** in **Bewerken** om het adres van een bestaande locatie opnieuw op te zoeken.
+- Via **Bewerken** kun je één locatie bewerken. Na het verplaatsen van een trafoblok volgen de rode cirkel, het label, de kaartopmerkingen en het kaartvenster automatisch. De C1–C4-coördinaten worden eveneens bijgewerkt.
+- Kaartopmerkingen blijven op dezelfde afstand van het station staan. Als je het station en opmerkingen samen verplaatst, worden de opmerkingen één keer verschoven. Een opmerking kun je ook afzonderlijk verplaatsen; die nieuwe positie blijft daarna het uitgangspunt. Draaien om het stationcentrum draait de opmerkingen niet mee.
+- Kies **Kaartopmerking** om meteen in te zoomen op de rode cirkel van de geselecteerde trafo. De volledige cirkel blijft zichtbaar met ruimte eromheen. Voer de tekst in en wijs daarna het beginpunt binnen de cirkel aan.
 
 Locatiefoto’s blijven rasterreferenties. Neem ze mee bij overdracht van de DWG. Het ingebouwde sjabloon bevat de A3-indeling en de vectoronderdelen. Projectfoto’s, logo’s en kaartachtergronden komen uit het eigen project.
 
 ## Trafonummer en VL/AL wijzigen
 
-Kies een locatie en open **Geselecteerd blad**. Wijzig het trafonummer of locatietype en klik op **Opslaan**. Als je een bestaande alternatieve locatie tot voorkeur maakt terwijl de trafo al een VL heeft, vraagt de plug-in om bevestiging en zet de oude VL om naar een AL.
+Kies een locatie en open **Bewerken**. Wijzig het trafonummer of locatietype en klik op **Opslaan**. Als je een bestaande alternatieve locatie tot voorkeur maakt terwijl de trafo al een VL heeft, vraagt de plug-in om bevestiging en zet de oude VL om naar een AL.
 
 ## Foto’s en PDF’s
 
