@@ -422,7 +422,37 @@ internal static class StationLocationSheets
     internal static bool IsStationLayer(string layer) =>
         layer.StartsWith("TB_STATION_", StringComparison.OrdinalIgnoreCase);
 
-    internal static void UpdateMovedStationTables(Database db, IReadOnlyCollection<ObjectId> changed)
+    internal static bool IsMapNoteLayer(string layer) =>
+        IsStationLayer(layer) && layer.EndsWith(NoteLayerSuffix, StringComparison.OrdinalIgnoreCase);
+
+    // Read-only snapshots also cover undo/redo, whose object notifications do not always
+    // include OpenedForModify. No extra data needs to be written to older drawings.
+    internal static void CaptureStationNotePositions(Database db, IDictionary<ObjectId, Point3d> stations,
+        IDictionary<ObjectId, Point3d> notes)
+    {
+        using var tr = db.TransactionManager.StartOpenCloseTransaction();
+        var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+        foreach (var id in model)
+        {
+            if (!IsLive(id) || id.ObjectClass.DxfName is not ("INSERT" or "TEXT" or "MTEXT")) continue;
+            if (tr.GetObject(id, OpenMode.ForRead) is not Entity entity || !IsStationLayer(entity.Layer)) continue;
+            if (entity is BlockReference block && IsStationBlock(tr, block))
+                stations.TryAdd(id, block.Position);
+            else if (IsMapNoteLayer(entity.Layer) && MapNotePosition(entity) is { } position)
+                notes.TryAdd(id, position);
+        }
+    }
+
+    private static Point3d? MapNotePosition(Entity entity) => entity switch
+    {
+        DBText text => text.Position,
+        MText text => text.Location,
+        _ => null
+    };
+
+    internal static void UpdateMovedStationTables(Database db, IReadOnlyCollection<ObjectId> changed,
+        IReadOnlyDictionary<ObjectId, Point3d>? previousStations = null,
+        IReadOnlyDictionary<ObjectId, Point3d>? previousNotes = null)
     {
         using var tr = db.TransactionManager.StartTransaction();
         var stations = changed.Where(IsLive).Select(id => tr.GetObject(id, OpenMode.ForRead))
@@ -430,9 +460,28 @@ internal static class StationLocationSheets
             .ToLookup(station => station.Layer, StringComparer.OrdinalIgnoreCase);
         if (stations.Count == 0) return;
         var refreshMarkers = false;
+        ILookup<string, Entity>? notesByLayer = null;
         foreach (var sheet in ReadSheets(db, tr))
         {
-            if (stations[sheet.Layer].FirstOrDefault() is not { } station) continue;
+            // A copied block on the same layer has no unambiguous note ownership.
+            if (stations[sheet.Layer].Take(2).ToArray() is not [var station]) continue;
+            if (previousStations?.TryGetValue(station.ObjectId, out var previousPosition) == true &&
+                !station.Position.IsEqualTo(previousPosition, Tolerance.Global))
+            {
+                notesByLayer ??= MapNotes(db, tr).ToLookup(note => note.Layer, StringComparer.OrdinalIgnoreCase);
+                var displacement = Matrix3d.Displacement(station.Position - previousPosition);
+                foreach (var note in notesByLayer[sheet.Layer + NoteLayerSuffix])
+                {
+                    // MOVE/ROTATE can include both the station and its comments. Respect
+                    // any directly moved comment rather than applying the movement twice.
+                    if (previousNotes?.TryGetValue(note.ObjectId, out var originalNotePosition) == true &&
+                        MapNotePosition(note) is { } currentNotePosition &&
+                        !currentNotePosition.IsEqualTo(originalNotePosition, Tolerance.Global)) continue;
+                    if (!note.IsWriteEnabled) note.UpgradeOpen();
+                    note.TransformBy(displacement);
+                }
+                refreshMarkers = true;
+            }
             var layout = GetLayout(db, tr, sheet.Name);
             if (FindMapViewport(tr, layout) is { } viewport)
             {
@@ -450,6 +499,17 @@ internal static class StationLocationSheets
         }
         if (refreshMarkers) RefreshMarkers(db, tr);
         tr.Commit();
+    }
+
+    private static IEnumerable<Entity> MapNotes(Database db, Transaction tr)
+    {
+        var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+        foreach (var id in model)
+        {
+            if (!IsLive(id) || id.ObjectClass.DxfName is not ("TEXT" or "MTEXT")) continue;
+            if (tr.GetObject(id, OpenMode.ForRead) is Entity note && IsMapNoteLayer(note.Layer))
+                yield return note;
+        }
     }
 
     private static ObjectId ResolveBlock(Database db, Transaction tr, StationBlockChoice? choice) =>
@@ -690,7 +750,8 @@ internal static class StationLocationSheets
         {
             var model = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
             foreach (var id in model.Cast<ObjectId>().Where(IsLive).ToArray())
-                if (tr.GetObject(id, OpenMode.ForRead) is DBText note && note.LayerId == noteLayer)
+                if (tr.GetObject(id, OpenMode.ForRead) is Entity note &&
+                    note is DBText or MText && note.LayerId == noteLayer)
                 {
                     note.UpgradeOpen();
                     note.Erase();

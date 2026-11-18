@@ -21,10 +21,22 @@ internal sealed class StationHelpDialog : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         var tabs = new TabControl { Dock = DockStyle.Fill };
 
+        AddPage("Zijpaneel", """
+            STATIONLOCATIES opent het vaste zijpaneel. Je kunt blijven tekenen terwijl het paneel openstaat. Sleep het naar links of rechts, laat het zweven of gebruik de punaise om het automatisch te laten inschuiven.
+
+            Zoek op stationnummer, bladnaam, adres of deelgebied. Filter op VL, AL of locaties zonder foto. Klik om naar de locatie te zoomen; dubbelklik of druk op Enter om het blad te openen.
+
+            Selecteer een trafoblok in de tekening om de bijbehorende gegevens in het paneel te zien. Een filter dat de geselecteerde locatie verbergt wordt gewist. Bij een andere actieve DWG wisselt de inhoud mee.
+
+            Onder de lijst staan de foto en de opgeslagen AutoCAD-miniatuur van het blad. Als nog geen miniatuur beschikbaar is, open je het blad om de kaart te bekijken.
+
+            Bewerken, Alternatief toevoegen en Kaartopmerking werken direct op de gekozen locatie. Onder Project en uitvoer staan de overige bestaande functies. Tijdens een lopende AutoCAD-opdracht zijn acties tijdelijk uitgeschakeld.
+            """);
+
         AddPage("Automatisch", """
             Bij het plaatsen maakt de plug-in een A3-detailblad op schaal 1:250. Dat blad toont alleen het bijbehorende trafoblok. De rode cirkel en de naam verschijnen meteen in modelruimte.
 
-            Verplaats of draai een geplaatst trafoblok met AutoCAD. Na het afronden van het commando werkt de plug-in de C1–C4-coördinaten op het detailblad bij als die zijn ingeschakeld. Bij verplaatsen volgt het kaartvenster het blok, zodat het in het midden blijft.
+            Verplaats of draai een geplaatst trafoblok met AutoCAD. Na het afronden van het commando werkt de plug-in de C1–C4-coördinaten op het detailblad bij als die zijn ingeschakeld. Bij verplaatsen volgen de rode cirkel, het label, de kaartopmerkingen en het kaartvenster het blok. De opmerkingen behouden hun afstand tot het station. Als je opmerkingen samen met het station selecteert, worden ze één keer verplaatst. Een apart verplaatste opmerking behoudt haar nieuwe positie. Draaien om het stationcentrum draait de opmerkingen niet mee.
 
             Een nieuw blad krijgt de datum van vandaag. Je kunt de datum overschrijven. Gedeelde projectgegevens worden overgenomen uit bestaande bladen en bij het opslaan van een wijziging doorgevoerd in alle onderhoeken.
 
@@ -36,13 +48,13 @@ internal sealed class StationHelpDialog : Form
         AddPage("Locaties en bladen", """
             Locatie plaatsen — kies een trafonummer of naam, kies VL of AL en wijs het midden en de draairichting aan. Elke trafo hoort één voorkeurslocatie (VL) en minstens één alternatieve locatie (AL) te hebben.
 
-            Open blad — open het detailblad. Dubbelklikken op een locatie werkt ook.
+            Blad openen — open het detailblad. Dubbelklikken op een locatie werkt ook.
 
-            Blad bewerken — wijzig onder meer de naam, VL/AL, datum, adres, foto en de zichtbaarheid van de hoekcoördinaten.
+            Bewerken — wijzig onder meer de naam, VL/AL, datum, adres, foto en de zichtbaarheid van de hoekcoördinaten.
 
-            Kaartopmerking plaatsen — zoomt meteen in op de rode cirkel van de geselecteerde trafo. Voer de tekst in en kies een punt binnen de cirkel. De rode tekst verschijnt op het eigen detailblad en blijft verborgen op Totaal.
+            Kaartopmerking — zoomt meteen in op de rode cirkel van de geselecteerde trafo. Voer de tekst in en kies een punt binnen de cirkel. De rode tekst verschijnt op het eigen detailblad en blijft verborgen op Totaal.
 
-            Locatie verwijderen — verwijder de geselecteerde locatie en het bijbehorende detailblad.
+            Verwijderen — verwijder de geselecteerde locatie en het bijbehorende detailblad.
 
             Alle bladen bewerken — wijzig datums, adressen, opmerkingen, tekeningnummers en foto’s in één tabel.
             """);
@@ -58,7 +70,7 @@ internal sealed class StationHelpDialog : Form
 
             Totaal maken of Totaal vernieuwen — maak of herbereken het overzicht en de kaartuitsnede wanneer je op deze knop klikt.
 
-            Afdrukicoon — selecteer de gewenste bladen, eventueel met Totaal, en gebruik één set plotinstellingen en één uitvoermap. Elk blad krijgt een eigen PDF. Lijndiktes staan standaard uit.
+            Bladen plotten — selecteer de gewenste bladen, eventueel met Totaal, en gebruik één set plotinstellingen en één uitvoermap. Elk blad krijgt een eigen PDF. Lijndiktes staan standaard uit.
             """);
 
         var close = new Button { Text = "Sluiten", DialogResult = DialogResult.Cancel,
